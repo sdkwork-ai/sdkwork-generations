@@ -1,6 +1,5 @@
 version: 2
 defaultProfile: cloud.production
-
 profiles:
   cloud.test:
     deployment:
@@ -21,13 +20,32 @@ profiles:
         tls: sdkwork.com
         mode: web+api
         web: adaptive
+      - domain: generations-test.birdcoder.com
+        tls: birdcoder.com
+        mode: web+api
+        web: adaptive
+      - domain: generations-test.dtupay.com
+        tls: dtupay.com
+        mode: web+api
+        web: adaptive
+      - domain: generations-test.sdkwork.cn
+        tls: sdkwork.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations-test.birdcoder.cn
+        tls: birdcoder.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations-test.dtupay.cn
+        tls: dtupay.cn
+        mode: web+api
+        web: adaptive
     packages: []
     overrides:
       topology:
         spec: specs/topology.spec.json
         profile: cloud.test
         env: etc/topology/cloud.test.env
-
   cloud.staging:
     deployment:
       deploymentProfile: cloud
@@ -47,13 +65,32 @@ profiles:
         tls: sdkwork.com
         mode: web+api
         web: adaptive
+      - domain: generations-staging.birdcoder.com
+        tls: birdcoder.com
+        mode: web+api
+        web: adaptive
+      - domain: generations-staging.dtupay.com
+        tls: dtupay.com
+        mode: web+api
+        web: adaptive
+      - domain: generations-staging.sdkwork.cn
+        tls: sdkwork.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations-staging.birdcoder.cn
+        tls: birdcoder.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations-staging.dtupay.cn
+        tls: dtupay.cn
+        mode: web+api
+        web: adaptive
     packages: []
     overrides:
       topology:
         spec: specs/topology.spec.json
         profile: cloud.staging
         env: etc/topology/cloud.staging.env
-
   cloud.production:
     deployment:
       deploymentProfile: cloud
@@ -73,13 +110,32 @@ profiles:
         tls: sdkwork.com
         mode: web+api
         web: adaptive
+      - domain: generations.birdcoder.com
+        tls: birdcoder.com
+        mode: web+api
+        web: adaptive
+      - domain: generations.dtupay.com
+        tls: dtupay.com
+        mode: web+api
+        web: adaptive
+      - domain: generations.sdkwork.cn
+        tls: sdkwork.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations.birdcoder.cn
+        tls: birdcoder.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations.dtupay.cn
+        tls: dtupay.cn
+        mode: web+api
+        web: adaptive
     packages: []
     overrides:
       topology:
         spec: specs/topology.spec.json
         profile: cloud.production
         env: etc/topology/cloud.production.env
-
   standalone.production:
     deployment:
       deploymentProfile: standalone
@@ -97,6 +153,26 @@ profiles:
     expose:
       - domain: generations.sdkwork.com
         tls: sdkwork.com
+        mode: web+api
+        web: adaptive
+      - domain: generations.birdcoder.com
+        tls: birdcoder.com
+        mode: web+api
+        web: adaptive
+      - domain: generations.dtupay.com
+        tls: dtupay.com
+        mode: web+api
+        web: adaptive
+      - domain: generations.sdkwork.cn
+        tls: sdkwork.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations.birdcoder.cn
+        tls: birdcoder.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations.dtupay.cn
+        tls: dtupay.cn
         mode: web+api
         web: adaptive
     packages: []
