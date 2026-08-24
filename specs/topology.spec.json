@@ -73,7 +73,15 @@
             "generations-dev.dtupay.com",
             "generations-dev.sdkwork.cn",
             "generations-dev.birdcoder.cn",
-            "generations-dev.dtupay.cn"
+            "generations-dev.dtupay.cn",
+            "generations-dev.skubc.com",
+            "generations-dev.skubc.cn",
+            "generations-dev.zowalk.com",
+            "generations-dev.zowalk.cn",
+            "generations-dev.offer86.com",
+            "generations-dev.offer86.cn",
+            "generations-dev.86offer.com",
+            "generations-dev.86offer.cn"
           ]
         },
         "test": {
@@ -83,7 +91,15 @@
             "generations-test.dtupay.com",
             "generations-test.sdkwork.cn",
             "generations-test.birdcoder.cn",
-            "generations-test.dtupay.cn"
+            "generations-test.dtupay.cn",
+            "generations-test.skubc.com",
+            "generations-test.skubc.cn",
+            "generations-test.zowalk.com",
+            "generations-test.zowalk.cn",
+            "generations-test.offer86.com",
+            "generations-test.offer86.cn",
+            "generations-test.86offer.com",
+            "generations-test.86offer.cn"
           ]
         },
         "staging": {
@@ -93,7 +109,15 @@
             "generations-staging.dtupay.com",
             "generations-staging.sdkwork.cn",
             "generations-staging.birdcoder.cn",
-            "generations-staging.dtupay.cn"
+            "generations-staging.dtupay.cn",
+            "generations-staging.skubc.com",
+            "generations-staging.skubc.cn",
+            "generations-staging.zowalk.com",
+            "generations-staging.zowalk.cn",
+            "generations-staging.offer86.com",
+            "generations-staging.offer86.cn",
+            "generations-staging.86offer.com",
+            "generations-staging.86offer.cn"
           ]
         }
       },
@@ -103,7 +127,15 @@
         "generations.dtupay.com",
         "generations.sdkwork.cn",
         "generations.birdcoder.cn",
-        "generations.dtupay.cn"
+        "generations.dtupay.cn",
+        "generations.skubc.com",
+        "generations.skubc.cn",
+        "generations.zowalk.com",
+        "generations.zowalk.cn",
+        "generations.offer86.com",
+        "generations.offer86.cn",
+        "generations.86offer.com",
+        "generations.86offer.cn"
       ]
     },
     "platform.api-gateway": {
@@ -116,7 +148,15 @@
             "api-dev.dtupay.com",
             "api-dev.sdkwork.cn",
             "api-dev.birdcoder.cn",
-            "api-dev.dtupay.cn"
+            "api-dev.dtupay.cn",
+            "api-dev.skubc.com",
+            "api-dev.skubc.cn",
+            "api-dev.zowalk.com",
+            "api-dev.zowalk.cn",
+            "api-dev.offer86.com",
+            "api-dev.offer86.cn",
+            "api-dev.86offer.com",
+            "api-dev.86offer.cn"
           ]
         },
         "test": {
@@ -126,7 +166,15 @@
             "api-test.dtupay.com",
             "api-test.sdkwork.cn",
             "api-test.birdcoder.cn",
-            "api-test.dtupay.cn"
+            "api-test.dtupay.cn",
+            "api-test.skubc.com",
+            "api-test.skubc.cn",
+            "api-test.zowalk.com",
+            "api-test.zowalk.cn",
+            "api-test.offer86.com",
+            "api-test.offer86.cn",
+            "api-test.86offer.com",
+            "api-test.86offer.cn"
           ]
         },
         "staging": {
@@ -136,7 +184,15 @@
             "api-staging.dtupay.com",
             "api-staging.sdkwork.cn",
             "api-staging.birdcoder.cn",
-            "api-staging.dtupay.cn"
+            "api-staging.dtupay.cn",
+            "api-staging.skubc.com",
+            "api-staging.skubc.cn",
+            "api-staging.zowalk.com",
+            "api-staging.zowalk.cn",
+            "api-staging.offer86.com",
+            "api-staging.offer86.cn",
+            "api-staging.86offer.com",
+            "api-staging.86offer.cn"
           ]
         }
       },
@@ -146,7 +202,15 @@
         "api.dtupay.com",
         "api.sdkwork.cn",
         "api.birdcoder.cn",
-        "api.dtupay.cn"
+        "api.dtupay.cn",
+        "api.skubc.com",
+        "api.skubc.cn",
+        "api.zowalk.com",
+        "api.zowalk.cn",
+        "api.offer86.com",
+        "api.offer86.cn",
+        "api.86offer.com",
+        "api.86offer.cn"
       ]
     }
   },

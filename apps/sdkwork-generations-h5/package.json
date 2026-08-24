@@ -9,12 +9,14 @@
     "dev:browser": "vite",
     "build:browser": "vite build",
     "build": "vite build",
-    "build:staging": "vite build --mode staging",
-    "build:prod": "vite build --mode production",
+    "build:staging": "node ../../../sdkwork-specs/tools/build-browser-client.mjs --app-root . --environment staging",
+    "build:prod": "node ../../../sdkwork-specs/tools/build-browser-client.mjs --app-root . --environment prod",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest",
-    "test:config": "vitest run --config vitest.config.ts"
+    "test:config": "vitest run --config vitest.config.ts",
+    "build:dev": "node ../../../sdkwork-specs/tools/build-browser-client.mjs --app-root . --environment dev",
+    "build:test": "node ../../../sdkwork-specs/tools/build-browser-client.mjs --app-root . --environment test"
   },
   "dependencies": {
     "react": "^18.2.0",
