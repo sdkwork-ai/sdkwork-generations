@@ -19,17 +19,18 @@ async fn assemble_business_routes(pool: sqlx::PgPool) -> Router {
         Arc::new(Vec::new());
     let asset_port = Arc::new(repository::NoopAssetPort);
 
-    sdkwork_routes_generations_app_api::gateway_mount(
-        sdkwork_intelligence_generations_service::GenerationsServiceState::new(
-            generation_repo,
-            result_repo,
-            timeline_repo,
-            config,
-            providers,
-            asset_port,
-        ),
-    )
-    .await
+    let state = sdkwork_intelligence_generations_service::GenerationsServiceState::new(
+        generation_repo,
+        result_repo,
+        timeline_repo,
+        config,
+        providers,
+        asset_port,
+    );
+
+    let app_router = sdkwork_routes_generations_app_api::gateway_mount(state.clone()).await;
+    let backend_router = sdkwork_routes_generations_backend_api::gateway_mount(state).await;
+    app_router.merge(backend_router)
 }
 
 fn build_api_contribution(
@@ -48,10 +49,16 @@ fn build_api_contribution(
 }
 
 fn openapi_documents() -> Result<Vec<serde_json::Value>, String> {
-    [(
-        "sdkwork-generations-app-api",
-        include_str!("../../../sdks/sdkwork-generations-app-sdk/openapi/sdkwork-generations-app-api.openapi.json"),
-    )]
+    [
+        (
+            "sdkwork-generations-app-api",
+            include_str!("../../../sdks/sdkwork-generations-app-sdk/openapi/sdkwork-generations-app-api.openapi.json"),
+        ),
+        (
+            "sdkwork-generations-backend-api",
+            include_str!("../../../sdks/sdkwork-generations-backend-sdk/openapi/sdkwork-generations-backend-api.openapi.json"),
+        ),
+    ]
     .into_iter()
     .map(|(owner, source)| {
         serde_json::from_str(source).map_err(|error| format!("invalid {owner} OpenAPI: {error}"))
@@ -107,7 +114,7 @@ pub async fn assemble_app_api_contribution() -> Result<ApiAssemblyContribution, 
 }
 
 fn build_route_manifest() -> HttpRouteManifest {
-    sdkwork_routes_generations_app_api::app_route_manifest()
+    sdkwork_routes_generations_http_shared::combined_route_manifest()
 }
 
 /// Repository module.
