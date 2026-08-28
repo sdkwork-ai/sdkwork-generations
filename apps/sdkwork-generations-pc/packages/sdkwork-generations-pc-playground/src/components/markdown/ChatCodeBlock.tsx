@@ -42,11 +42,13 @@ export function ChatCodeBlock({
 
   return (
     <figure
-      className="sdkwork-playground-chat-code-block my-3 min-w-0 overflow-hidden text-left"
+      className="sdkwork-playground-chat-code-block my-3 min-w-0 overflow-hidden rounded-xl border border-current/10 bg-current/[0.04] text-left shadow-sm"
       data-tone={tone}
     >
-      <figcaption className="sdkwork-playground-chat-code-block__header">
-        <span className="sdkwork-playground-chat-code-block__language">{languageLabel}</span>
+      <figcaption className="sdkwork-playground-chat-code-block__header flex items-center justify-between border-b border-current/10 bg-current/[0.06] px-4 py-2 text-xs">
+        <span className="sdkwork-playground-chat-code-block__language font-mono font-medium text-cyan-500 dark:text-cyan-400">
+          {languageLabel}
+        </span>
         <button
           type="button"
           title={copyLabel}
@@ -54,7 +56,7 @@ export function ChatCodeBlock({
           onClick={() => {
             void handleCopy();
           }}
-          className="sdkwork-playground-chat-code-block__copy"
+          className="sdkwork-playground-chat-code-block__copy inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-current/70 transition-colors hover:bg-current/10 hover:text-current"
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           <span>{copyLabel}</span>
@@ -62,7 +64,7 @@ export function ChatCodeBlock({
       </figcaption>
       <pre
         tabIndex={0}
-        className="max-w-full overflow-x-auto px-0 py-3 text-[13.5px] leading-[1.625rem] [tab-size:2]"
+        className="max-w-full overflow-x-auto bg-[#1e1e1e] px-0 py-3 text-[13.5px] leading-[1.625rem] text-gray-100 [tab-size:2] dark:bg-[#0f0f0f]"
       >
         <code className="block min-w-max whitespace-pre font-mono">
           {renderHighlightedCodeLines(displayCode || '\u00a0', language)}

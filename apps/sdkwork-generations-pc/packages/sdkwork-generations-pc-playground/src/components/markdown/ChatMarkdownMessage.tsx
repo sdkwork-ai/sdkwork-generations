@@ -1,4 +1,4 @@
-import { Children, cloneElement, isValidElement, useMemo } from 'react';
+import { Children, cloneElement, createContext, isValidElement, useContext, useMemo } from 'react';
 import type {
   AnchorHTMLAttributes,
   ComponentPropsWithoutRef,
@@ -33,6 +33,7 @@ type MarkdownImageProps = ImgHTMLAttributes<HTMLImageElement> & {
 
 const INLINE_MATH_PREFIX = '__CHAT_MATH_INLINE_';
 const MATH_DISPLAY_LANGUAGE = 'math-display';
+const BlockCodeContext = createContext(false);
 
 export function ChatMarkdownMessage({
   content,
@@ -295,7 +296,11 @@ function ChatMarkdownDivider({
 }
 
 function ChatMarkdownPre({ children }: MarkdownComponentProps<HTMLPreElement>) {
-  return <>{children}</>;
+  return (
+    <BlockCodeContext.Provider value={true}>
+      {children}
+    </BlockCodeContext.Provider>
+  );
 }
 
 function ChatMarkdownCode({
@@ -305,12 +310,13 @@ function ChatMarkdownCode({
   tone,
   ...props
 }: MarkdownCodeProps) {
+  const inBlock = useContext(BlockCodeContext);
   const rawCode = flattenText(children);
   const code = rawCode.replace(/\n$/, '');
   const language = /language-([a-zA-Z0-9_-]+)/.exec(className || '')?.[1];
   const displayMath = language === MATH_DISPLAY_LANGUAGE ? decodeMathPayload(code.trim()) : null;
   const inlineMath = decodeInlineMathPlaceholder(code.trim());
-  const isBlock = Boolean(className?.includes('language-') || rawCode.includes('\n') || rawCode.endsWith('\n'));
+  const isBlock = inBlock || Boolean(className?.includes('language-') || rawCode.includes('\n') || rawCode.endsWith('\n'));
 
   if (displayMath !== null) {
     return <ChatMarkdownMath tex={displayMath} tone={tone} display />;
@@ -328,7 +334,10 @@ function ChatMarkdownCode({
     <code
       {...props}
       data-tone={tone}
-      className={mergeClassNames('sdkwork-playground-chat-markdown__inline-code', className)}
+      className={mergeClassNames(
+        'sdkwork-playground-chat-markdown__inline-code rounded border border-current/10 bg-current/[0.06] px-1.5 py-0.5 font-mono text-[0.88em]',
+        className,
+      )}
     >
       {children}
     </code>
