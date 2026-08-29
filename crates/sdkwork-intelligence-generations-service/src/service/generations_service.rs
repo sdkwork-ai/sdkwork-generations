@@ -7,15 +7,20 @@ use crate::context::GenerationsRequestContext;
 use crate::domain::models::{
     CreateGenerationCommandRequest, FavoriteGenerationRequest, GenerationCommandResponse,
     GenerationModality, GenerationRecord, GenerationResult, GenerationStatus,
-    PageInfo, SaveGenerationResultToAssetsRequest,
+    GenerationTimelineEvent, PageInfo, SaveGenerationResultToAssetsRequest,
 };
 use crate::error::GenerationsError;
 use crate::ports::{
-    AssetPort, GenerationProvider, GenerationRepository, GenerationResultRepository,
-    ListGenerationsParams, ListResultsParams, ListTimelineParams, TimelineRepository,
+    AssetPort, CreateGenerationParams, GenerationDispatchOutcome, GenerationProvider,
+    GenerationRepository, GenerationResultRepository, GenerationUsageFact,
+    GenerationUsagePort, GenerationUsageSource, ListGenerationsParams, ListResultsParams,
+    ListTimelineParams, TimelineRepository, UpdateGenerationProviderStateParams,
 };
 
 pub use super::handlers::build_app_routes;
+
+/// Maximum prompt preview length persisted on the record.
+const PROMPT_PREVIEW_MAX_CHARS: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Service state
@@ -30,6 +35,7 @@ pub struct GenerationsServiceState {
     config: Arc<GenerationsConfig>,
     providers: Arc<Vec<Box<dyn GenerationProvider>>>,
     asset_port: Arc<dyn AssetPort>,
+    usage_port: Arc<dyn GenerationUsagePort>,
 }
 
 impl GenerationsServiceState {
@@ -41,6 +47,7 @@ impl GenerationsServiceState {
         config: Arc<GenerationsConfig>,
         providers: Arc<Vec<Box<dyn GenerationProvider>>>,
         asset_port: Arc<dyn AssetPort>,
+        usage_port: Arc<dyn GenerationUsagePort>,
     ) -> Self {
         Self {
             repository,
@@ -49,6 +56,7 @@ impl GenerationsServiceState {
             config,
             providers,
             asset_port,
+            usage_port,
         }
     }
 
@@ -81,6 +89,11 @@ impl GenerationsServiceState {
     pub fn asset_port(&self) -> &Arc<dyn AssetPort> {
         &self.asset_port
     }
+
+    /// Get a reference to the usage port.
+    pub fn usage_port(&self) -> &Arc<dyn GenerationUsagePort> {
+        &self.usage_port
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -98,9 +111,10 @@ impl GenerationsService {
 
     /// Create a generation by dispatching to the appropriate provider.
     ///
-    /// This is the unified entry point for all creation endpoints. It resolves
-    /// the provider based on modality and operation type, records the generation
-    /// in the repository, and dispatches to the external service.
+    /// This is the unified entry point for all creation endpoints. It persists
+    /// a queued generation record, dispatches the command to the resolved
+    /// provider, then persists the provider outcome (results, timeline events,
+    /// metering usage) before returning the refreshed record.
     pub async fn create_generation(
         state: &GenerationsServiceState,
         context: &GenerationsRequestContext,
@@ -110,9 +124,64 @@ impl GenerationsService {
     ) -> Result<GenerationCommandResponse, GenerationsError> {
         let provider = resolve_provider(state, &modality, operation_type)?;
 
-        let record = provider.dispatch(command, context).await?;
+        let created = state
+            .repository
+            .create(CreateGenerationParams {
+                tenant_id: command.tenant_id.clone(),
+                user_id: context.http.user_id.clone(),
+                modality: modality.to_string(),
+                operation_type: operation_type.to_string(),
+                source_provider: Some(provider.vendor().to_string()),
+                source_job_id: None,
+                prompt_preview: Some(truncate_preview(&command.prompt)),
+                organization_id: command.organization_id.clone(),
+                metadata: command_metadata(command),
+                input_asset_ids: command.input_asset_ids.clone().unwrap_or_default(),
+            })
+            .await?;
 
-        Ok(GenerationCommandResponse { generation: record })
+        state
+            .timeline_repository
+            .append(&GenerationTimelineEvent {
+                id: format!("{id}:dispatch", id = created.id),
+                generation_id: created.id.clone(),
+                event_type: "generation.dispatched".to_string(),
+                message: Some(format!(
+                    "generation dispatched to provider {vendor}",
+                    vendor = provider.vendor()
+                )),
+                payload: Some(serde_json::json!({
+                    "vendor": provider.vendor(),
+                    "operationType": operation_type,
+                    "modality": modality.to_string(),
+                })),
+                created_at: now_iso(),
+            })
+            .await
+            .ok();
+
+        let outcome = match provider.dispatch(&created, command, context).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                state
+                    .repository
+                    .update_provider_state(UpdateGenerationProviderStateParams {
+                        id: created.id.clone(),
+                        status: Some(GenerationStatus::Failed.to_string()),
+                        error_code: Some(error.platform_code().to_string()),
+                        error_message: Some(error.to_string()),
+                        ..Default::default()
+                    })
+                    .await
+                    .ok();
+                return Err(error);
+            }
+        };
+
+        let final_record = persist_outcome(state, outcome, GenerationUsageSource::Dispatch).await?;
+        Ok(GenerationCommandResponse {
+            generation: final_record,
+        })
     }
 
     /// Convenience entry for text-to-image.
@@ -258,14 +327,21 @@ impl GenerationsService {
     // -- Read ---------------------------------------------------------------
 
     /// Get a generation record by id.
+    ///
+    /// Non-terminal records are refreshed against the dispatching provider
+    /// first so async tasks surface their latest status and results.
     pub async fn get_generation(
         state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
         id: &str,
     ) -> Result<GenerationRecord, GenerationsError> {
-        state
+        let record = state
             .repository
             .get(id)
             .await?
+            .ok_or_else(|| GenerationsError::NotFound(id.to_string()))?;
+        refresh_pending_generation(state, context, record)
+            .await
             .ok_or_else(|| GenerationsError::NotFound(id.to_string()))
     }
 
@@ -284,11 +360,20 @@ impl GenerationsService {
     }
 
     /// List results for a generation.
+    ///
+    /// Non-terminal generations are refreshed against the dispatching provider
+    /// first so newly finished async tasks return their results.
     pub async fn list_results(
         state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
         generation_id: &str,
         params: ListResultsParams,
     ) -> Result<(Vec<GenerationResult>, PageInfo), GenerationsError> {
+        if let Some(record) = state.repository.get(generation_id).await? {
+            if let Some(refreshed) = refresh_pending_generation(state, context, record).await {
+                let _ = refreshed;
+            }
+        }
         let params = ListResultsParams {
             generation_id: generation_id.to_string(),
             ..params
@@ -462,5 +547,130 @@ fn resolve_provider<'a>(
     Err(GenerationsError::Provider(format!(
         "no provider registered for modality={modality}, operation_type={operation_type}"
     )))
+}
+
+/// Resolve a provider by the vendor recorded on the generation (refresh path).
+fn resolve_provider_by_vendor<'a>(
+    state: &'a GenerationsServiceState,
+    modality: &GenerationModality,
+    vendor: &str,
+) -> Option<&'a dyn GenerationProvider> {
+    state.providers().iter().find_map(|provider| {
+        (provider.modality() == *modality && provider.vendor() == vendor)
+            .then(|| provider.as_ref())
+    })
+}
+
+/// Persist a provider outcome: results, timeline events, record state, usage.
+///
+/// Usage recording failures are traced and never fail the generation.
+pub async fn persist_outcome(
+    state: &GenerationsServiceState,
+    outcome: GenerationDispatchOutcome,
+    source: GenerationUsageSource,
+) -> Result<GenerationRecord, GenerationsError> {
+    let generation_id = outcome.record.id.clone();
+    let tenant_id = outcome.record.tenant_id.clone();
+    let user_id = outcome.record.user_id.clone();
+    let modality = outcome.record.modality.to_string();
+    let operation_type = outcome.record.operation_type.clone();
+    let result_count = outcome.results.len() as i64;
+
+    for result in &outcome.results {
+        state.result_repository.create(result).await?;
+    }
+    for event in &outcome.timeline_events {
+        state.timeline_repository.append(event).await.ok();
+    }
+
+    let updated = state
+        .repository
+        .update_provider_state(UpdateGenerationProviderStateParams {
+            id: generation_id.clone(),
+            status: Some(outcome.record.status.to_string()),
+            source_job_id: outcome.record.source_job_id.clone(),
+            result_count: Some(result_count as i32),
+            ..Default::default()
+        })
+        .await?
+        .unwrap_or(outcome.record);
+
+    if let Some(usage) = outcome.usage {
+        record_usage(
+            state,
+            GenerationUsageFact {
+                generation_id,
+                tenant_id,
+                user_id,
+                modality,
+                operation_type,
+                source,
+                usage,
+            },
+        )
+        .await;
+    }
+
+    Ok(updated)
+}
+
+/// Record a metering fact through the usage port; failures never propagate.
+async fn record_usage(state: &GenerationsServiceState, fact: GenerationUsageFact) {
+    if fact.usage.is_empty() {
+        return;
+    }
+    if let Err(error) = state.usage_port.record_usage(&fact).await {
+        tracing::warn!(
+            generation_id = %fact.generation_id,
+            vendor = %fact.usage.vendor,
+            error = %error,
+            "generation usage recording failed"
+        );
+    }
+}
+
+/// Refresh a non-terminal generation against its dispatching provider.
+///
+/// Returns the refreshed record, or the original record when no refresh
+/// applies (terminal status, unknown vendor, or sync provider).
+pub async fn refresh_pending_generation(
+    state: &GenerationsServiceState,
+    context: &GenerationsRequestContext,
+    record: GenerationRecord,
+) -> Option<GenerationRecord> {
+    if matches!(
+        record.status,
+        GenerationStatus::Succeeded | GenerationStatus::Failed | GenerationStatus::Canceled
+    ) {
+        return Some(record);
+    }
+    let vendor = record.source_provider.clone()?;
+    let provider = resolve_provider_by_vendor(state, &record.modality, &vendor)?;
+    let outcome = provider
+        .retrieve(&record, context)
+        .await
+        .ok()
+        .flatten()?;
+    persist_outcome(state, outcome, GenerationUsageSource::Retrieve)
+        .await
+        .ok()
+}
+
+/// Truncate a prompt to the persisted preview length.
+fn truncate_preview(prompt: &str) -> String {
+    prompt.chars().take(PROMPT_PREVIEW_MAX_CHARS).collect()
+}
+
+/// Build the persisted parameter snapshot for a generation command.
+fn command_metadata(command: &CreateGenerationCommandRequest) -> serde_json::Value {
+    serde_json::json!({
+        "model": command.model,
+        "parameters": command.parameters,
+    })
+}
+
+/// Current UTC timestamp in RFC 3339 format.
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 

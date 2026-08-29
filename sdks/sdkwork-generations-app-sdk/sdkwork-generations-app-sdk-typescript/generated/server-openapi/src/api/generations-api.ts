@@ -32,7 +32,7 @@ export interface GenerationsResultsListParams {
 }
 
 export interface GenerationsResultsSaveToAssetsParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsResultsApi {
@@ -51,10 +51,10 @@ async list(generationId: string, params?: GenerationsResultsListParams, requestO
     return this.client.request<{ items: GenerationResult[]; pageInfo: { mode: 'cursor'; nextCursor?: string | null; hasMore: boolean; }; }>(appendQueryString(appApiPath(`/generations/${serializePathParameter(generationId, { name: 'generationId', style: 'simple', explode: false })}/results`), query), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'GET' as any, sdkworkUnwrapKind: 'page' });
   }
 
-async saveToAssets(generationId: string, resultId: string, body: SaveGenerationResultToAssetsRequest, params?: GenerationsResultsSaveToAssetsParams, requestOptions?: ApiRequestOptions): Promise<GenerationResult> {
+async saveToAssets(generationId: string, resultId: string, body: SaveGenerationResultToAssetsRequest, params: GenerationsResultsSaveToAssetsParams, requestOptions?: ApiRequestOptions): Promise<GenerationResult> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
@@ -63,15 +63,15 @@ async saveToAssets(generationId: string, resultId: string, body: SaveGenerationR
 }
 
 export interface GenerationsVoiceSpeechParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsVoiceTranscriptionParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsVoiceTranslationParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsVoiceApi {
@@ -82,30 +82,30 @@ export class GenerationsVoiceApi {
   }
 
 
-async speech(body: CreateGenerationCommandRequest, params?: GenerationsVoiceSpeechParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async speech(body: CreateGenerationCommandRequest, params: GenerationsVoiceSpeechParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/voice/speech`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async transcription(body: CreateGenerationCommandRequest, params?: GenerationsVoiceTranscriptionParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async transcription(body: CreateGenerationCommandRequest, params: GenerationsVoiceTranscriptionParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/voice/transcription`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async translation(body: CreateGenerationCommandRequest, params?: GenerationsVoiceTranslationParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async translation(body: CreateGenerationCommandRequest, params: GenerationsVoiceTranslationParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
@@ -114,7 +114,7 @@ async translation(body: CreateGenerationCommandRequest, params?: GenerationsVoic
 }
 
 export interface GenerationsSoundEffectsCreateParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsSoundEffectsApi {
@@ -125,10 +125,10 @@ export class GenerationsSoundEffectsApi {
   }
 
 
-async create(body: CreateGenerationCommandRequest, params?: GenerationsSoundEffectsCreateParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async create(body: CreateGenerationCommandRequest, params: GenerationsSoundEffectsCreateParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
@@ -137,11 +137,11 @@ async create(body: CreateGenerationCommandRequest, params?: GenerationsSoundEffe
 }
 
 export interface GenerationsMusicTextToMusicParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsMusicLyricsToMusicParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsMusicApi {
@@ -152,20 +152,20 @@ export class GenerationsMusicApi {
   }
 
 
-async textToMusic(body: CreateGenerationCommandRequest, params?: GenerationsMusicTextToMusicParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async textToMusic(body: CreateGenerationCommandRequest, params: GenerationsMusicTextToMusicParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/music/text_to_music`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async lyricsToMusic(body: CreateGenerationCommandRequest, params?: GenerationsMusicLyricsToMusicParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async lyricsToMusic(body: CreateGenerationCommandRequest, params: GenerationsMusicLyricsToMusicParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
@@ -174,15 +174,15 @@ async lyricsToMusic(body: CreateGenerationCommandRequest, params?: GenerationsMu
 }
 
 export interface GenerationsVideosTextToVideoParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsVideosImageToVideoParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsVideosVideoExtendParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsVideosApi {
@@ -193,30 +193,30 @@ export class GenerationsVideosApi {
   }
 
 
-async textToVideo(body: CreateGenerationCommandRequest, params?: GenerationsVideosTextToVideoParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async textToVideo(body: CreateGenerationCommandRequest, params: GenerationsVideosTextToVideoParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/videos/text_to_video`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async imageToVideo(body: CreateGenerationCommandRequest, params?: GenerationsVideosImageToVideoParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async imageToVideo(body: CreateGenerationCommandRequest, params: GenerationsVideosImageToVideoParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/videos/image_to_video`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async videoExtend(body: CreateGenerationCommandRequest, params?: GenerationsVideosVideoExtendParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async videoExtend(body: CreateGenerationCommandRequest, params: GenerationsVideosVideoExtendParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
@@ -225,11 +225,11 @@ async videoExtend(body: CreateGenerationCommandRequest, params?: GenerationsVide
 }
 
 export interface GenerationsImagesTextToImageParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsImagesImageEditParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsImagesApi {
@@ -240,20 +240,20 @@ export class GenerationsImagesApi {
   }
 
 
-async textToImage(body: CreateGenerationCommandRequest, params?: GenerationsImagesTextToImageParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async textToImage(body: CreateGenerationCommandRequest, params: GenerationsImagesTextToImageParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/images/text_to_image`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async imageEdit(body: CreateGenerationCommandRequest, params?: GenerationsImagesImageEditParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async imageEdit(body: CreateGenerationCommandRequest, params: GenerationsImagesImageEditParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
@@ -271,11 +271,15 @@ export interface GenerationsListParams {
 }
 
 export interface GenerationsCancelParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface GenerationsRetryParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
+}
+
+export interface GenerationsFavoriteParams {
+  idempotencyKey: string;
 }
 
 export class GenerationsApi {
@@ -316,28 +320,34 @@ async retrieve(generationId: string, requestOptions?: ApiRequestOptions): Promis
     return this.client.request<GenerationRecord>(appApiPath(`/generations/${serializePathParameter(generationId, { name: 'generationId', style: 'simple', explode: false })}`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'GET' as any, sdkworkUnwrapKind: 'item' });
   }
 
-async cancel(generationId: string, body?: GenerationActionRequest, params?: GenerationsCancelParams, requestOptions?: ApiRequestOptions): Promise<GenerationRecord> {
+async cancel(generationId: string, params: GenerationsCancelParams, body?: GenerationActionRequest, requestOptions?: ApiRequestOptions): Promise<GenerationRecord> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationRecord>(appApiPath(`/generations/${serializePathParameter(generationId, { name: 'generationId', style: 'simple', explode: false })}/cancel`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, ...(body !== undefined ? { body, contentType: 'application/json' } : {}), ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async retry(generationId: string, body?: GenerationActionRequest, params?: GenerationsRetryParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+async retry(generationId: string, params: GenerationsRetryParams, body?: GenerationActionRequest, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/${serializePathParameter(generationId, { name: 'generationId', style: 'simple', explode: false })}/retry`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, ...(body !== undefined ? { body, contentType: 'application/json' } : {}), ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 
-async favorite(generationId: string, body: FavoriteGenerationRequest, requestOptions?: ApiRequestOptions): Promise<GenerationRecord> {
-    return this.client.request<GenerationRecord>(appApiPath(`/generations/${serializePathParameter(generationId, { name: 'generationId', style: 'simple', explode: false })}/favorite`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', sdkworkUnwrapKind: 'item' });
+async favorite(generationId: string, body: FavoriteGenerationRequest, params: GenerationsFavoriteParams, requestOptions?: ApiRequestOptions): Promise<GenerationRecord> {
+    const requestHeaders = buildRequestHeaders(
+      {
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
+      },
+      {}
+    );
+    return this.client.request<GenerationRecord>(appApiPath(`/generations/${serializePathParameter(generationId, { name: 'generationId', style: 'simple', explode: false })}/favorite`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 }
 

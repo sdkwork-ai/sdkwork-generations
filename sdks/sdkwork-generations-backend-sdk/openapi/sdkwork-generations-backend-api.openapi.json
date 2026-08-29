@@ -458,7 +458,8 @@
               }
             }
           }
-        }
+        },
+        "x-sdkwork-idempotent": true
       }
     }
   },
@@ -478,10 +479,10 @@
       "IdempotencyKey": {
         "name": "Idempotency-Key",
         "in": "header",
-        "required": false,
+        "required": true,
         "schema": {
           "type": "string",
-          "minLength": 8,
+          "minLength": 1,
           "maxLength": 128
         }
       }

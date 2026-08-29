@@ -165,15 +165,38 @@ pub struct GenerationTimelineEvent {
 pub struct MediaResource {
     #[serde(rename = "mediaResourceId")]
     pub media_resource_id: Option<String>,
+    /// Media kind (for example `image`, `video`, `audio`).
+    pub kind: Option<String>,
+    /// Provenance of the media (for example `generated`, `external_url`).
+    pub source: Option<String>,
+    /// Canonical media URL.
+    pub url: Option<String>,
+    /// Public CDN URL when it differs from [`MediaResource::url`].
+    #[serde(rename = "publicUrl")]
+    pub public_url: Option<String>,
+    /// Provider or drive URI for the media.
+    pub uri: Option<String>,
     #[serde(rename = "mediaType")]
     pub media_type: Option<String>,
     #[serde(rename = "contentType")]
     pub content_type: Option<String>,
     pub width: Option<i32>,
     pub height: Option<i32>,
-    #[serde(rename = "durationMs")]
+    /// Media duration in milliseconds (int64 as decimal string on the wire).
+    #[serde(
+        rename = "durationMs",
+        with = "sdkwork_utils_rust::serde_int64::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub duration_ms: Option<i64>,
-    #[serde(rename = "sizeBytes")]
+    /// Media size in bytes (int64 as decimal string on the wire).
+    #[serde(
+        rename = "sizeBytes",
+        with = "sdkwork_utils_rust::serde_int64::option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub size_bytes: Option<i64>,
     #[serde(rename = "checksumSha256")]
     pub checksum_sha256: Option<String>,

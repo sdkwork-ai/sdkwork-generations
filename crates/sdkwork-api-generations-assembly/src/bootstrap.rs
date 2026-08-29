@@ -15,9 +15,13 @@ async fn assemble_business_routes(pool: sqlx::PgPool) -> Router {
     let result_repo = Arc::new(repository::PostgresGenerationResultRepository::new(pool.clone()));
     let timeline_repo = Arc::new(repository::PostgresTimelineRepository::new(pool.clone()));
     let config = Arc::new(sdkwork_intelligence_generations_service::GenerationsConfig::from_env());
-    let providers: Arc<Vec<Box<dyn sdkwork_intelligence_generations_service::ports::GenerationProvider>>> =
-        Arc::new(Vec::new());
+    let providers = sdkwork_generations_provider_adapter::build_providers_from_env()
+        .unwrap_or_else(|error| {
+            tracing::error!(error = %error, "generations providers disabled; creation endpoints will fail");
+            Arc::new(Vec::new())
+        });
     let asset_port = Arc::new(repository::NoopAssetPort);
+    let usage_port = Arc::new(repository::PostgresGenerationUsageRecorder::new(pool.clone()));
 
     let state = sdkwork_intelligence_generations_service::GenerationsServiceState::new(
         generation_repo,
@@ -26,6 +30,7 @@ async fn assemble_business_routes(pool: sqlx::PgPool) -> Router {
         config,
         providers,
         asset_port,
+        usage_port,
     );
 
     let app_router = sdkwork_routes_generations_app_api::gateway_mount(state.clone()).await;
@@ -130,7 +135,8 @@ mod repository {
     use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
     use sdkwork_intelligence_generations_service::ports::{
         AssetPort, CreateGenerationParams, GenerationRepository, GenerationResultRepository,
-        ListGenerationsParams, ListResultsParams, ListTimelineParams, TimelineRepository,
+        GenerationUsageFact, GenerationUsagePort, ListGenerationsParams, ListResultsParams,
+        ListTimelineParams, TimelineRepository, UpdateGenerationProviderStateParams,
     };
 
     // -----------------------------------------------------------------------
@@ -155,15 +161,24 @@ mod repository {
         ) -> Result<GenerationRecord, GenerationsError> {
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().to_rfc3339();
+            let input_refs = serde_json::to_value(&params.input_asset_ids).map_err(|e| {
+                GenerationsError::Internal(format!("failed to serialize input refs: {e}"))
+            })?;
 
             sqlx::query(
                 r#"
-                INSERT INTO generation_record (id, tenant_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, metadata, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $10)
+                INSERT INTO generation_record (
+                    id, tenant_id, organization_id, user_id, modality, status, operation_type,
+                    source_provider, source_job_id, prompt_preview, parameter_snapshot,
+                    input_refs_json, created_at, updated_at
+                )
+                VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11,
+                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 "#,
             )
             .bind(&id)
             .bind(&params.tenant_id)
+            .bind(&params.organization_id)
             .bind(&params.user_id)
             .bind(&params.modality)
             .bind(&params.operation_type)
@@ -171,14 +186,14 @@ mod repository {
             .bind(&params.source_job_id)
             .bind(&params.prompt_preview)
             .bind(&params.metadata)
-            .bind(&now)
+            .bind(&input_refs)
             .execute(&self.pool)
             .await?;
 
             Ok(GenerationRecord {
                 id,
                 tenant_id: params.tenant_id,
-                organization_id: None,
+                organization_id: params.organization_id,
                 user_id: params.user_id,
                 modality: GenerationModality::parse(&params.modality).unwrap_or(GenerationModality::Image),
                 status: GenerationStatus::Queued,
@@ -302,6 +317,42 @@ mod repository {
 
             self.get(id).await
         }
+
+        async fn update_provider_state(
+            &self,
+            params: UpdateGenerationProviderStateParams,
+        ) -> Result<Option<GenerationRecord>, GenerationsError> {
+            let result = sqlx::query(
+                r#"
+                UPDATE generation_record SET
+                    status = COALESCE($2, status),
+                    source_job_id = COALESCE($3, source_job_id),
+                    result_count = COALESCE($4, result_count),
+                    error_code = CASE WHEN $6 THEN NULL ELSE COALESCE($5, error_code) END,
+                    error_message = CASE WHEN $6 THEN NULL ELSE COALESCE($7, error_message) END,
+                    completed_at = CASE
+                        WHEN $2 IN ('succeeded', 'failed', 'canceled') THEN CURRENT_TIMESTAMP
+                        ELSE completed_at
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                "#,
+            )
+            .bind(&params.id)
+            .bind(&params.status)
+            .bind(&params.source_job_id)
+            .bind(params.result_count)
+            .bind(&params.error_code)
+            .bind(params.clear_error)
+            .bind(&params.error_message)
+            .execute(&self.pool)
+            .await?;
+
+            if result.rows_affected() == 0 {
+                return Ok(None);
+            }
+            self.get(&params.id).await
+        }
     }
 
     #[derive(sqlx::FromRow)]
@@ -359,6 +410,43 @@ mod repository {
 
     #[async_trait]
     impl GenerationResultRepository for PostgresGenerationResultRepository {
+        async fn create(&self, result: &GenerationResult) -> Result<GenerationResult, GenerationsError> {
+            let snapshot_json = match &result.resource_snapshot {
+                Some(resource) => Some(serde_json::to_value(resource).map_err(|e| {
+                    GenerationsError::Internal(format!("failed to serialize resource_snapshot: {e}"))
+                })?),
+                None => None,
+            };
+            sqlx::query(
+                r#"
+                INSERT INTO generation_result (
+                    id, generation_id, tenant_id, result_type, drive_space_id, drive_node_id,
+                    drive_uri, resource_snapshot, asset_id, preview_text, created_at
+                )
+                VALUES (
+                    COALESCE($1, 'gen-result-' || gen_random_uuid()::text),
+                    $2,
+                    (SELECT tenant_id FROM generation_record WHERE id = $2),
+                    $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (id) DO NOTHING
+                "#,
+            )
+            .bind(&result.id)
+            .bind(&result.generation_id)
+            .bind(&result.result_type)
+            .bind(&result.drive_space_id)
+            .bind(&result.drive_node_id)
+            .bind(&result.drive_uri)
+            .bind(&snapshot_json)
+            .bind(&result.asset_id)
+            .bind(&result.preview_text)
+            .execute(&self.pool)
+            .await?;
+
+            Ok(result.clone())
+        }
+
         async fn get(
             &self,
             generation_id: &str,
@@ -494,6 +582,33 @@ mod repository {
 
     #[async_trait]
     impl TimelineRepository for PostgresTimelineRepository {
+        async fn append(
+            &self,
+            event: &GenerationTimelineEvent,
+        ) -> Result<GenerationTimelineEvent, GenerationsError> {
+            sqlx::query(
+                r#"
+                INSERT INTO generation_timeline_event (id, generation_id, tenant_id, event_type, message, payload, created_at)
+                VALUES (
+                    COALESCE($1, 'gen-timeline-' || gen_random_uuid()::text),
+                    $2,
+                    (SELECT tenant_id FROM generation_record WHERE id = $2),
+                    $3, $4, $5, CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (id) DO NOTHING
+                "#,
+            )
+            .bind(&event.id)
+            .bind(&event.generation_id)
+            .bind(&event.event_type)
+            .bind(&event.message)
+            .bind(&event.payload)
+            .execute(&self.pool)
+            .await?;
+
+            Ok(event.clone())
+        }
+
         async fn list(
             &self,
             params: ListTimelineParams,
@@ -550,6 +665,82 @@ mod repository {
                 payload: self.payload,
                 created_at: self.created_at,
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PostgreSQL usage recorder (billing facts)
+    // -----------------------------------------------------------------------
+
+    /// Persists metering facts for billing: a `generation.usage.recorded`
+    /// timeline event plus a `generation.usage.recorded` outbox event that
+    /// downstream billing consumers drain.
+    pub struct PostgresGenerationUsageRecorder {
+        pool: sqlx::PgPool,
+    }
+
+    impl PostgresGenerationUsageRecorder {
+        pub fn new(pool: sqlx::PgPool) -> Self {
+            Self { pool }
+        }
+    }
+
+    #[async_trait]
+    impl GenerationUsagePort for PostgresGenerationUsageRecorder {
+        async fn record_usage(&self, fact: &GenerationUsageFact) -> Result<(), GenerationsError> {
+            let usage = &fact.usage;
+            let payload = serde_json::json!({
+                "generationId": fact.generation_id,
+                "tenantId": fact.tenant_id,
+                "userId": fact.user_id,
+                "modality": fact.modality,
+                "operationType": fact.operation_type,
+                "source": fact.source.as_str(),
+                "vendor": usage.vendor,
+                "model": usage.model,
+                "imageCount": usage.image_count,
+                "videoSeconds": usage.video_seconds,
+                "audioSeconds": usage.audio_seconds,
+                "inputTokens": usage.input_tokens,
+                "outputTokens": usage.output_tokens,
+                "raw": usage.raw,
+            });
+            let fact_id = uuid::Uuid::new_v4().to_string();
+
+            sqlx::query(
+                r#"
+                INSERT INTO generation_timeline_event (id, generation_id, tenant_id, event_type, message, payload)
+                VALUES ($1, $2, $3, 'generation.usage.recorded', $4, $5)
+                "#,
+            )
+            .bind(format!("{id}:usage", id = fact.generation_id))
+            .bind(&fact.generation_id)
+            .bind(&fact.tenant_id)
+            .bind(format!(
+                "usage recorded: vendor={vendor}, images={images}, videoSeconds={video}, audioSeconds={audio}",
+                vendor = usage.vendor,
+                images = usage.image_count,
+                video = usage.video_seconds,
+                audio = usage.audio_seconds
+            ))
+            .bind(&payload)
+            .execute(&self.pool)
+            .await?;
+
+            sqlx::query(
+                r#"
+                INSERT INTO generation_outbox_event (id, tenant_id, aggregate_type, aggregate_id, event_type, payload)
+                VALUES ($1, $2, 'generation', $3, 'generation.usage.recorded', $4)
+                "#,
+            )
+            .bind(fact_id)
+            .bind(&fact.tenant_id)
+            .bind(&fact.generation_id)
+            .bind(&payload)
+            .execute(&self.pool)
+            .await?;
+
+            Ok(())
         }
     }
 

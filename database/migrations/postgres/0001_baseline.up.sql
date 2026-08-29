@@ -7,7 +7,7 @@
 --   generation_source_inbox_event, generation_timeline_event, generation_result,
 --   generation_record_projection, generation_outbox_event) and their indexes.
 -- reversible: true
--- rollback: 0001_baseline.down.sql
+-- rollback: down-migration
 -- transactional: true
 -- lock: lightweight
 -- lock_timeout: 5s

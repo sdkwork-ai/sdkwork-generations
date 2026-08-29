@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS generation_record (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMPTZ,
-    CHECK (modality IN ('image', 'video', 'music', 'voice')),
+    CHECK (modality IN ('image', 'video', 'music', 'voice', 'audio', 'sfx')),
     CHECK (status IN ('queued', 'running', 'requires_action', 'succeeded', 'failed', 'canceled')),
     CHECK (result_count >= 0)
 );

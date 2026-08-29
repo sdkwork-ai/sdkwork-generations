@@ -62,11 +62,11 @@ const client = new SdkworkAppClient({
 
 ## API Modules
 
-- `client.generations` - generations API
+- `client.generations` - generations_api API
 
 ## Usage Examples
 
-### generations
+### generations_api
 
 ```typescript
 // GET /app/v3/api/generations

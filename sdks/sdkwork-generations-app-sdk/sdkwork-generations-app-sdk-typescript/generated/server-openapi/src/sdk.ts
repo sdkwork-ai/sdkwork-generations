@@ -2,7 +2,7 @@ import { HttpClient, createHttpClient } from './http/client';
 import type { SdkworkAppConfig } from './types/common';
 import type { AuthTokenManager } from '@sdkwork/sdk-common';
 
-import { GenerationsApi, createGenerationsApi } from './api/generations';
+import { GenerationsApi, createGenerationsApi } from './api/generations-api';
 
 export class SdkworkAppClient {
   private httpClient: HttpClient;

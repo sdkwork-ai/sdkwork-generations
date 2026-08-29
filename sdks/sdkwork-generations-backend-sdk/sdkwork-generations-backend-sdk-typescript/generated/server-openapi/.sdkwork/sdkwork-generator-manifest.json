@@ -56,7 +56,7 @@
     },
     {
       "path": "src/api/generations-backend.ts",
-      "sha256": "1f1ecfa5213252f4e87cc3be40b88b1004aafbfb14ea29b2f265427462e5380b"
+      "sha256": "176850a2abf3cba73c3ed4d363b428433a2e341da96467d95e02c9769e206482"
     },
     {
       "path": "src/api/index.ts",

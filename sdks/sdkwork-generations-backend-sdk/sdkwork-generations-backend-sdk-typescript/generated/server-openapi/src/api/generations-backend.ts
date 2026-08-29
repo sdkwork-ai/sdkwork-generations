@@ -5,7 +5,7 @@ import type { CreateReconciliationRunRequest, GenerationDispatchJob, GenerationS
 
 
 export interface GenerationsBackendGenerationReconciliationRunsCreateParams {
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export class GenerationsBackendGenerationReconciliationRunsApi {
@@ -16,10 +16,10 @@ export class GenerationsBackendGenerationReconciliationRunsApi {
   }
 
 
-async create(body: CreateReconciliationRunRequest, params?: GenerationsBackendGenerationReconciliationRunsCreateParams, requestOptions?: ApiRequestOptions): Promise<ReconciliationRun> {
+async create(body: CreateReconciliationRunRequest, params: GenerationsBackendGenerationReconciliationRunsCreateParams, requestOptions?: ApiRequestOptions): Promise<ReconciliationRun> {
     const requestHeaders = buildRequestHeaders(
       {
-        'Idempotency-Key': { value: params?.idempotencyKey, style: 'simple', explode: false },
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
       },
       {}
     );

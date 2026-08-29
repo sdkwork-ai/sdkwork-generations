@@ -26,7 +26,12 @@ pub struct CreateGenerationParams {
     pub source_provider: Option<String>,
     pub source_job_id: Option<String>,
     pub prompt_preview: Option<String>,
+    /// Owning organization, when the subject boundary provides one.
+    pub organization_id: Option<String>,
+    /// Command parameter snapshot persisted in `generation_record.parameter_snapshot`.
     pub metadata: Value,
+    /// Input asset references persisted in `generation_record.input_refs_json`.
+    pub input_asset_ids: Vec<String>,
 }
 
 /// Parameters for listing generation records.
@@ -79,6 +84,26 @@ pub trait GenerationRepository: Send + Sync {
         id: &str,
         favorite: bool,
     ) -> Result<Option<GenerationRecord>, GenerationsError>;
+
+    /// Persist provider-assigned state (status, source job id, result count,
+    /// error) after a dispatch or retrieval. Returns the refreshed record.
+    async fn update_provider_state(
+        &self,
+        params: UpdateGenerationProviderStateParams,
+    ) -> Result<Option<GenerationRecord>, GenerationsError>;
+}
+
+/// Provider-assigned state to persist on a generation record.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateGenerationProviderStateParams {
+    pub id: String,
+    pub status: Option<String>,
+    pub source_job_id: Option<String>,
+    pub result_count: Option<i32>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    /// When true, clears a previously stored provider error.
+    pub clear_error: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +121,9 @@ pub struct ListResultsParams {
 /// Repository port for generation result persistence.
 #[async_trait]
 pub trait GenerationResultRepository: Send + Sync {
+    /// Persist a new generation result.
+    async fn create(&self, result: &GenerationResult) -> Result<GenerationResult, GenerationsError>;
+
     /// Retrieve a single generation result by id.
     async fn get(
         &self,
@@ -131,6 +159,12 @@ pub struct ListTimelineParams {
 /// Repository port for generation timeline event persistence.
 #[async_trait]
 pub trait TimelineRepository: Send + Sync {
+    /// Append a timeline event for a generation.
+    async fn append(
+        &self,
+        event: &GenerationTimelineEvent,
+    ) -> Result<GenerationTimelineEvent, GenerationsError>;
+
     /// List timeline events for a generation with cursor pagination.
     async fn list(
         &self,

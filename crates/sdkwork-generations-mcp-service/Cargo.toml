@@ -1,0 +1,24 @@
+[package]
+name = "sdkwork-generations-mcp-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Model Context Protocol adapter exposing sdkwork-generations media capabilities to chat agents."
+
+[dependencies]
+rmcp.workspace = true
+schemars.workspace = true
+sdkwork-agent-kernel.workspace = true
+sdkwork-intelligence-generations-service.workspace = true
+sdkwork-generations-provider-adapter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+axum = { version = "0.8", default-features = false }

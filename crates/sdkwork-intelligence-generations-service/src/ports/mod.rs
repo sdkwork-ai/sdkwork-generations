@@ -7,8 +7,12 @@
 pub mod provider;
 pub mod repository;
 
-pub use provider::{AssetPort, GenerationProvider};
+pub use provider::{
+    AssetPort, GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
+    GenerationUsageFact, GenerationUsagePort, GenerationUsageSource,
+};
 pub use repository::{
     CreateGenerationParams, GenerationRepository, GenerationResultRepository,
     ListGenerationsParams, ListResultsParams, ListTimelineParams, TimelineRepository,
+    UpdateGenerationProviderStateParams,
 };

@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "crates/sdkwork-generations-database-host",
+    "crates/sdkwork-generations-mcp-service",
+    "crates/sdkwork-generations-provider-adapter",
     "crates/sdkwork-intelligence-generations-service",
     "crates/sdkwork-routes-generations-http-shared",
     "crates/sdkwork-routes-generations-app-api",
@@ -33,6 +35,9 @@ chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
+rmcp = { version = "2.2.0", default-features = false, features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
+schemars = "1"
+base64 = "0.22"
 
 # Platform frameworks
 sdkwork-web-core = { path = "../sdkwork-web-framework/crates/sdkwork-web-core" }
@@ -60,8 +65,16 @@ sdkwork-routes-drive-app-api = { path = "../sdkwork-drive/crates/sdkwork-routes-
 
 # Local crate dependencies
 sdkwork-generations-database-host = { path = "crates/sdkwork-generations-database-host" }
+sdkwork-generations-provider-adapter = { path = "crates/sdkwork-generations-provider-adapter" }
+sdkwork-generations-mcp-service = { path = "crates/sdkwork-generations-mcp-service" }
 sdkwork-intelligence-generations-service = { path = "crates/sdkwork-intelligence-generations-service", features = ["http-axum", "postgres-sync"] }
 sdkwork-routes-generations-http-shared = { path = "crates/sdkwork-routes-generations-http-shared" }
 sdkwork-routes-generations-app-api = { path = "crates/sdkwork-routes-generations-app-api" }
 sdkwork-routes-generations-backend-api = { path = "crates/sdkwork-routes-generations-backend-api" }
 sdkwork-api-generations-assembly = { path = "crates/sdkwork-api-generations-assembly" }
+
+# Kernel (RIG agent MCP provider contract)
+sdkwork-agent-kernel = { path = "../sdkwork-kernel/sdkwork-agent-kernel" }
+
+# Cloudrouter generated Rust SDK (media gateway vendor calls)
+cloudrouter-open-sdk = { path = "../sdkwork-cloudrouter/sdks/cloudrouter-open-sdk/cloudrouter-open-sdk-rust/generated/server-openapi" }

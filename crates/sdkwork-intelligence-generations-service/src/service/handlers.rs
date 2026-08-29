@@ -344,9 +344,11 @@ async fn create_translation(
 /// GET /app/v3/api/generations/{generationId}
 async fn get_generation(
     State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
     Path(generation_id): Path<String>,
 ) -> axum::Json<Value> {
-    match GenerationsService::get_generation(&state, &generation_id).await {
+    let context = context_from_extension(&extension);
+    match GenerationsService::get_generation(&state, &context, &generation_id).await {
         Ok(record) => success(serde_json::json!({ "item": record })),
         Err(error) => failure(&error),
     }
@@ -355,16 +357,18 @@ async fn get_generation(
 /// GET /app/v3/api/generations/{generationId}/results
 async fn list_results(
     State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
     Path(generation_id): Path<String>,
     Query(query): Query<ListResultsQuery>,
 ) -> axum::Json<Value> {
+    let context = context_from_extension(&extension);
     let params = ListResultsParams {
         generation_id: generation_id.clone(),
         cursor: query.cursor,
         page_size: query.page_size,
     };
 
-    match GenerationsService::list_results(&state, &generation_id, params).await {
+    match GenerationsService::list_results(&state, &context, &generation_id, params).await {
         Ok((items, page_info)) => {
             success(serde_json::json!({ "items": items, "pageInfo": page_info }))
         }
@@ -375,14 +379,21 @@ async fn list_results(
 /// GET /app/v3/api/generations/{generationId}/timeline
 async fn list_timeline(
     State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
     Path(generation_id): Path<String>,
     Query(query): Query<ListTimelineQuery>,
 ) -> axum::Json<Value> {
+    let context = context_from_extension(&extension);
     let params = ListTimelineParams {
         generation_id: generation_id.clone(),
         cursor: query.cursor,
         page_size: query.page_size,
     };
+
+    if let Some(record) = state.repository().get(&generation_id).await.ok().flatten() {
+        crate::service::generations_service::refresh_pending_generation(&state, &context, record)
+            .await;
+    }
 
     match GenerationsService::list_timeline(&state, &generation_id, params).await {
         Ok((items, page_info)) => {
