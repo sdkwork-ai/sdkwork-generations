@@ -33,8 +33,8 @@ async fn assemble_business_routes(pool: sqlx::PgPool) -> Router {
         usage_port,
     );
 
-    let app_router = sdkwork_routes_generations_app_api::gateway_mount(state.clone()).await;
-    let backend_router = sdkwork_routes_generations_backend_api::gateway_mount(state).await;
+    let app_router = sdkwork_routes_generations_app_api::build_router().with_state(state.clone());
+    let backend_router = sdkwork_routes_generations_backend_api::build_router().with_state(state);
     app_router.merge(backend_router)
 }
 
@@ -48,7 +48,7 @@ fn build_api_contribution(
         router,
         build_route_manifest(),
         openapi_documents()?,
-        vec![sdkwork_routes_drive_app_api::drive_app_context_injector()],
+        vec![sdkwork_routes_generations_http_shared::generations_request_context_injector()],
         readiness_check,
     )
 }

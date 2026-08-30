@@ -307,22 +307,23 @@ export interface SdkworkGenerationsTimelineResourceClient {
 export interface SdkworkGenerationsResourceClient {
   cancel(
     generationId: string,
-    body?: SdkworkGenerationActionRequest,
     params?: SdkworkGenerationIdempotencyParams,
+    body?: SdkworkGenerationActionRequest,
   ): Promise<SdkworkGenerationRecord>;
   favorite(
     generationId: string,
     body: SdkworkGenerationFavoriteRequest,
+    params?: SdkworkGenerationIdempotencyParams,
   ): Promise<SdkworkGenerationRecord>;
-  get(generationId: string): Promise<SdkworkGenerationRecord>;
+  retrieve(generationId: string): Promise<SdkworkGenerationRecord>;
   images: SdkworkGenerationsImagesResourceClient;
   list(params?: SdkworkGenerationsListParams): Promise<SdkworkGenerationRecordPage>;
   music: SdkworkGenerationsMusicResourceClient;
   results: SdkworkGenerationsResultsResourceClient;
   retry(
     generationId: string,
-    body?: SdkworkGenerationActionRequest,
     params?: SdkworkGenerationIdempotencyParams,
+    body?: SdkworkGenerationActionRequest,
   ): Promise<SdkworkGenerationCommandResponse>;
   soundEffects: SdkworkGenerationsSoundEffectsResourceClient;
   timeline: SdkworkGenerationsTimelineResourceClient;
@@ -474,8 +475,8 @@ function createCommandRequest(input: SdkworkGenerationCommandInput): SdkworkGene
 
 function createIdempotencyParams(
   idempotencyKey: string | undefined,
-): SdkworkGenerationIdempotencyParams | undefined {
-  return idempotencyKey ? { idempotencyKey } : undefined;
+): SdkworkGenerationIdempotencyParams {
+  return idempotencyKey ? { idempotencyKey } : {};
 }
 
 function createActionRequest(
@@ -564,8 +565,8 @@ export function createSdkworkGenerationService(
       const generations = requireGenerationsResourceClient(options.sdkClients);
       return generations.cancel(
         input.generationId,
-        createActionRequest(input.reason),
         createIdempotencyParams(input.idempotencyKey),
+        createActionRequest(input.reason),
       );
     },
 
@@ -590,7 +591,7 @@ export function createSdkworkGenerationService(
 
     async getGeneration(generationId) {
       const generations = requireGenerationsResourceClient(options.sdkClients);
-      return generations.get(generationId);
+      return generations.retrieve(generationId);
     },
 
     async getWorkspace() {
@@ -643,8 +644,8 @@ export function createSdkworkGenerationService(
       const generations = requireGenerationsResourceClient(options.sdkClients);
       const response = await generations.retry(
         input.generationId,
-        createActionRequest(input.reason),
         createIdempotencyParams(input.idempotencyKey),
+        createActionRequest(input.reason),
       );
 
       return createCommandResult(response);
@@ -666,9 +667,13 @@ export function createSdkworkGenerationService(
 
     async setFavorite(input) {
       const generations = requireGenerationsResourceClient(options.sdkClients);
-      return generations.favorite(input.generationId, {
-        favorite: input.favorite,
-      });
+      return generations.favorite(
+        input.generationId,
+        {
+          favorite: input.favorite,
+        },
+        createIdempotencyParams(undefined),
+      );
     },
   };
 }

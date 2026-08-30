@@ -30,7 +30,7 @@ function createGenerationsResourceClient(overrides = {}) {
       ...sdkGenerationRecord,
       favorite: true,
     }),
-    get: vi.fn().mockResolvedValue(sdkGenerationRecord),
+    retrieve: vi.fn().mockResolvedValue(sdkGenerationRecord),
     images: {
       imageEdit: vi.fn().mockResolvedValue({ generation: sdkGenerationRecord }),
       textToImage: vi.fn().mockResolvedValue({ generation: sdkGenerationRecord }),
@@ -530,18 +530,22 @@ describe("sdkwork-generations-pc-workspace service", () => {
       favorite: true,
     })).resolves.toMatchObject({ favorite: true });
 
-    expect(generations.get).toHaveBeenCalledWith("generation-1");
+    expect(generations.retrieve).toHaveBeenCalledWith("generation-1");
     expect(generations.cancel).toHaveBeenCalledWith(
       "generation-1",
-      { reason: "User stopped it" },
       { idempotencyKey: "cancel-1" },
+      { reason: "User stopped it" },
     );
     expect(generations.retry).toHaveBeenCalledWith(
       "generation-1",
-      { reason: "Retry after provider failure" },
       { idempotencyKey: "retry-1" },
+      { reason: "Retry after provider failure" },
     );
-    expect(generations.favorite).toHaveBeenCalledWith("generation-1", { favorite: true });
+    expect(generations.favorite).toHaveBeenCalledWith(
+      "generation-1",
+      { favorite: true },
+      {},
+    );
   });
 
   it("delegates result and timeline operations to injected generated app SDK resources", async () => {
