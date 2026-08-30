@@ -1,4 +1,9 @@
-//! Generated route inventory.
+//! Generated route inventory. Do not edit by hand; run pnpm api:assembly:materialize.
 
-/// Number of route crates composed by this assembly.
 pub const ROUTE_CRATE_COUNT: usize = 2;
+
+#[allow(dead_code)]
+pub const ROUTE_CRATE_PACKAGES: &[&str] = &[
+    "sdkwork-routes-generations-app-api",
+    "sdkwork-routes-generations-backend-api",
+];

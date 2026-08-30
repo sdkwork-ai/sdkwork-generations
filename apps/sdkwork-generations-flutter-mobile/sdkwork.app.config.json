@@ -55,7 +55,7 @@
         "type": "ICON",
         "purpose": "PRIMARY",
         "url": "https://cdn.sdkwork.com/apps/sdkwork-generations-flutter-mobile/assets/icon-1024.png",
-        "platform": "MOBILE",
+        "platform": "APP",
         "locale": "en-US",
         "width": 1024,
         "height": 1024,
@@ -65,14 +65,60 @@
         "sortOrder": 0,
         "enabled": true,
         "metadata": {
-          "assetOwner": "sdkwork-generations",
-          "source": "drive-media-governed"
+          "generatedPlaceholder": true
         }
       },
-      "platform": []
+      "platform": [],
+      "metadata": {
+        "generatedPlaceholder": true
+      }
     },
-    "screenshots": [],
-    "previews": [],
+    "screenshots": [
+      {
+        "id": "sdkwork-generations-flutter-mobile-web-screenshot",
+        "type": "SCREENSHOT",
+        "purpose": "CATALOG_SCREENSHOT",
+        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations-flutter-mobile/media/web-screenshot.png",
+        "platform": "WEB",
+        "locale": "en-US",
+        "deviceClass": "BROWSER",
+        "displayType": "WEB_DESKTOP",
+        "width": 1920,
+        "height": 1080,
+        "format": "PNG",
+        "fileSizeBytes": 1048576,
+        "alphaChannel": false,
+        "caption": "SDKWork Generations product screenshot.",
+        "sortOrder": 0,
+        "enabled": true,
+        "metadata": {
+          "generatedPlaceholder": true,
+          "altText": "SDKWork Generations app screenshot."
+        }
+      }
+    ],
+    "previews": [
+      {
+        "id": "sdkwork-generations-flutter-mobile-catalog-preview",
+        "type": "PREVIEW_IMAGE",
+        "purpose": "CATALOG_PREVIEW",
+        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations-flutter-mobile/media/preview-cover.png",
+        "platform": "WEB",
+        "locale": "en-US",
+        "width": 1600,
+        "height": 900,
+        "format": "PNG",
+        "fileSizeBytes": 786432,
+        "alphaChannel": false,
+        "caption": "SDKWork Generations preview.",
+        "sortOrder": 0,
+        "enabled": true,
+        "metadata": {
+          "generatedPlaceholder": true,
+          "altText": "SDKWork Generations preview cover."
+        }
+      }
+    ],
     "metadata": {
       "assetVersion": "0.1.0",
       "defaultLocale": "en-US"
@@ -132,7 +178,7 @@
         {
           "id": "android-arm64-standalone-mobile-aab",
           "name": "SDKWork Generations Flutter Android",
-          "sourceType": "GOOGLE_PLAY",
+          "sourceType": "APP_STORE",
           "packageFormat": "AAB",
           "platform": "APP_ANDROID",
           "architecture": "arm64",
@@ -143,7 +189,10 @@
             "releaseArtifact": "google-play"
           },
           "deploymentProfile": "standalone",
-          "runtimeTarget": "flutter-android"
+          "runtimeTarget": "flutter-android",
+          "profileBinding": "fixed",
+          "targetPlatform": "android",
+          "clientArchitecture": "flutter"
         },
         {
           "id": "ios-arm64-standalone-mobile-ipa",
@@ -159,7 +208,10 @@
             "releaseArtifact": "app-store"
           },
           "deploymentProfile": "standalone",
-          "runtimeTarget": "flutter-ios"
+          "runtimeTarget": "flutter-ios",
+          "profileBinding": "fixed",
+          "targetPlatform": "ios",
+          "clientArchitecture": "flutter"
         }
       ],
       "metadata": {
@@ -173,19 +225,20 @@
     "currentVersion": "0.1.0",
     "defaultChannel": "DEV",
     "latest": {
+      "STABLE": "0.1.0",
       "DEV": "0.1.0"
     },
     "notes": [
       {
         "version": "0.1.0",
         "releaseChannel": "DEV",
-        "title": "SDKWork Generations Flutter Mobile 0.1.0",
-        "summary": "Initial SDKWork App Manifest v3 identity for the Generations Flutter mobile app root.",
-        "content": "Defines the official Flutter mobile application root, package identity, runtime family, and store metadata.",
+        "title": "SDKWork Generations 0.1.0",
+        "summary": "SDKWork Generations initialized standard release.",
+        "content": "Initial SDKWork App Standard v3 manifest for SDKWork Generations.",
         "highlights": [
-          "SDKWork App Manifest v3 identity",
-          "Flutter mobile runtime family",
-          "Standard package and config ownership"
+          "SDKWork App Standard v3 configuration initialized",
+          "platform_app projection metadata standardized",
+          "Download package matrix normalized"
         ],
         "packageIds": [
           "android-arm64-standalone-mobile-aab",
@@ -195,9 +248,7 @@
         "current": true,
         "forceUpdate": false,
         "minSupportedVersion": "0.1.0",
-        "metadata": {
-          "releaseState": "development"
-        }
+        "metadata": {}
       }
     ]
   },

@@ -1,23 +1,32 @@
 {
+  "kind": "sdkwork.api.assembly",
   "schemaVersion": 1,
-  "kind": "sdkwork.api.assembly.manifest",
-  "assembly": {
-    "name": "sdkwork-api-generations-assembly",
-    "application": "sdkwork-generations",
-    "description": "Generations API assembly composing app-api and backend-api surfaces."
-  },
+  "applicationCode": "generations",
+  "apiMode": "served",
+  "packageName": "sdkwork-api-generations-assembly",
+  "crateDir": "crates/sdkwork-api-generations-assembly",
   "routeCrates": [
-    "sdkwork-routes-generations-app-api",
-    "sdkwork-routes-generations-backend-api"
-  ],
-  "surfaces": {
-    "appApi": {
-      "crate": "sdkwork-routes-generations-app-api",
-      "prefix": "/app/v3/api/generations"
+    {
+      "packageName": "sdkwork-routes-generations-app-api",
+      "memberDir": "crates/sdkwork-routes-generations-app-api",
+      "libName": "sdkwork_routes_generations_app_api",
+      "surface": "app-api",
+      "pathPrefix": null,
+      "mountOrder": 0,
+      "componentRef": "crates/sdkwork-routes-generations-app-api/specs/component.spec.json",
+      "routeManifestRef": "crates/sdkwork-routes-generations-app-api/specs/component.spec.json#contracts.routeManifest",
+      "sourceRef": "crates/sdkwork-routes-generations-app-api/Cargo.toml"
     },
-    "backendApi": {
-      "crate": "sdkwork-routes-generations-backend-api",
-      "prefix": "/backend/v3/api/generations"
+    {
+      "packageName": "sdkwork-routes-generations-backend-api",
+      "memberDir": "crates/sdkwork-routes-generations-backend-api",
+      "libName": "sdkwork_routes_generations_backend_api",
+      "surface": "backend-api",
+      "pathPrefix": null,
+      "mountOrder": 1,
+      "componentRef": "crates/sdkwork-routes-generations-backend-api/specs/component.spec.json",
+      "routeManifestRef": "crates/sdkwork-routes-generations-backend-api/specs/component.spec.json#contracts.routeManifest",
+      "sourceRef": "crates/sdkwork-routes-generations-backend-api/Cargo.toml"
     }
-  }
+  ]
 }

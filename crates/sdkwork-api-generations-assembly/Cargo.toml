@@ -10,11 +10,11 @@ name = "sdkwork_api_generations_assembly"
 path = "src/lib.rs"
 
 [dependencies]
-sdkwork-generations-provider-adapter.workspace = true
 axum.workspace = true
 tokio.workspace = true
 sdkwork-web-bootstrap.workspace = true
 sdkwork-web-core.workspace = true
+sdkwork-generations-provider-adapter.workspace = true
 anyhow.workspace = true
 sdkwork-database-sqlx.workspace = true
 sdkwork-generations-database-host.workspace = true

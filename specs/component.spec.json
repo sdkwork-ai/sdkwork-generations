@@ -97,7 +97,7 @@
     ],
     "sdkDependencies": [
       {
-        "workspace": "sdkwork-drive",
+        "workspace": "sdkwork-drive-app-sdk",
         "role": "drive-uploader-file-storage",
         "required": true,
         "dependencyMode": "independent-capability-module",
@@ -112,7 +112,7 @@
         }
       },
       {
-        "workspace": "sdkwork-assets",
+        "workspace": "sdkwork-assets-app-sdk",
         "role": "assets-catalog-for-generation-results",
         "required": true,
         "dependencyMode": "independent-capability-module",

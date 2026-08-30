@@ -122,6 +122,16 @@ fn build_route_manifest() -> HttpRouteManifest {
     sdkwork_routes_generations_http_shared::combined_route_manifest()
 }
 
+/// Generations App API route manifest for host gateway composition.
+///
+/// Host gateways that merge the Generations app surface contribution compose
+/// this manifest into their own surface route inventory so the Web Framework
+/// honors the Generations routes' declared authentication and permissions
+/// (API_ASSEMBLY_SPEC §3).
+pub fn app_api_route_manifest() -> HttpRouteManifest {
+    build_route_manifest()
+}
+
 /// Repository module.
 mod repository {
     use async_trait::async_trait;

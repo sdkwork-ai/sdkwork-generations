@@ -28,30 +28,179 @@
     "framework": "rust-service",
     "defaultPlatform": "API",
     "defaultArchitecture": "x64",
-    "supportedDeploymentProfiles": ["standalone", "cloud"],
+    "supportedDeploymentProfiles": [
+      "standalone",
+      "cloud"
+    ],
     "defaultDeploymentProfile": "standalone"
+  },
+  "media": {
+    "icons": {
+      "primary": {
+        "id": "sdkwork-generations-primary-icon",
+        "type": "ICON",
+        "purpose": "PRIMARY",
+        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations/assets/icon-1024.png",
+        "platform": "APP",
+        "locale": "en-US",
+        "width": 1024,
+        "height": 1024,
+        "format": "PNG",
+        "fileSizeBytes": 524288,
+        "alphaChannel": false,
+        "sortOrder": 0,
+        "enabled": true,
+        "metadata": {
+          "generatedPlaceholder": true
+        }
+      },
+      "platform": [],
+      "metadata": {
+        "generatedPlaceholder": true
+      }
+    },
+    "screenshots": [
+      {
+        "id": "sdkwork-generations-web-screenshot",
+        "type": "SCREENSHOT",
+        "purpose": "CATALOG_SCREENSHOT",
+        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations/media/web-screenshot.png",
+        "platform": "WEB",
+        "locale": "en-US",
+        "deviceClass": "BROWSER",
+        "displayType": "WEB_DESKTOP",
+        "width": 1920,
+        "height": 1080,
+        "format": "PNG",
+        "fileSizeBytes": 1048576,
+        "alphaChannel": false,
+        "caption": "SDKWork Generations product screenshot.",
+        "sortOrder": 0,
+        "enabled": true,
+        "metadata": {
+          "generatedPlaceholder": true,
+          "altText": "SDKWork Generations app screenshot."
+        }
+      }
+    ],
+    "previews": [
+      {
+        "id": "sdkwork-generations-catalog-preview",
+        "type": "PREVIEW_IMAGE",
+        "purpose": "CATALOG_PREVIEW",
+        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations/media/preview-cover.png",
+        "platform": "WEB",
+        "locale": "en-US",
+        "width": 1600,
+        "height": 900,
+        "format": "PNG",
+        "fileSizeBytes": 786432,
+        "alphaChannel": false,
+        "caption": "SDKWork Generations preview.",
+        "sortOrder": 0,
+        "enabled": true,
+        "metadata": {
+          "generatedPlaceholder": true,
+          "altText": "SDKWork Generations preview cover."
+        }
+      }
+    ],
+    "metadata": {
+      "assetVersion": "0.1.0",
+      "defaultLocale": "en-US"
+    }
   },
   "publish": {
     "status": "DRAFT",
-    "platforms": ["API", "WEB", "CLI"],
-    "installPlatforms": ["API"],
-    "installSkill": false,
-    "defaultPackageId": "linux-x64-standalone-server-tar-gz"
+    "platforms": [
+      "API",
+      "WEB",
+      "CLI"
+    ],
+    "installPlatforms": [
+      "API"
+    ],
+    "installSkill": {
+      "name": "sdkwork-skills-app"
+    },
+    "defaultPackageId": "linux-x64-standalone-server-tar-gz",
+    "stores": [],
+    "storeUrl": "https://sdkwork.com/apps/sdkwork-generations"
+  },
+  "artifacts": {
+    "installConfig": {
+      "defaultPackageId": "linux-x64-standalone-server-tar-gz",
+      "installCommand": "sdkwork install sdkwork-generations",
+      "launchCommand": "sdkwork open sdkwork-generations",
+      "uninstallCommand": "sdkwork uninstall sdkwork-generations",
+      "packages": [
+        {
+          "id": "linux-x64-standalone-server-tar-gz",
+          "name": "Sdkwork Generations standalone server archive",
+          "sourceType": "BINARY_URL",
+          "packageFormat": "TAR_GZ",
+          "platform": "API",
+          "url": "https://cdn.sdkwork.com/apps/sdkwork-generations/STABLE/0.1.0/linux-x64-standalone-server-tar-gz-0.1.0.tar.gz",
+          "architecture": "x64",
+          "checksumAlgorithm": "SHA-256",
+          "checksum": "f9a444208acc33adf893097427066a2d0f06c9cb861f674945bf77a2c01327a7",
+          "deploymentProfile": "standalone",
+          "runtimeTarget": "server",
+          "profileBinding": "fixed",
+          "enabled": true,
+          "metadata": {
+            "releaseBuildDeferred": false
+          }
+        },
+        {
+          "id": "linux-x64-cloud-server-tar-gz",
+          "name": "Sdkwork Generations cloud server archive",
+          "sourceType": "BINARY_URL",
+          "packageFormat": "TAR_GZ",
+          "platform": "API",
+          "url": "https://cdn.sdkwork.com/apps/sdkwork-generations/STABLE/0.1.0/linux-x64-cloud-server-tar-gz-0.1.0.tar.gz",
+          "architecture": "x64",
+          "checksumAlgorithm": "SHA-256",
+          "checksum": "33a48f2a4b9e165af4d25363f980c7bce73895ff814459bf65a85664b0e2e16c",
+          "deploymentProfile": "cloud",
+          "runtimeTarget": "server",
+          "profileBinding": "fixed",
+          "enabled": true,
+          "metadata": {
+            "releaseBuildDeferred": false
+          }
+        }
+      ]
+    }
   },
   "release": {
     "currentVersion": "0.1.0",
     "defaultChannel": "BETA",
     "latest": {
+      "STABLE": "0.1.0",
       "BETA": "0.1.0"
     },
     "notes": [
       {
         "version": "0.1.0",
-        "channel": "BETA",
-        "current": true,
+        "releaseChannel": "BETA",
+        "title": "SDKWork Generations 0.1.0",
+        "summary": "SDKWork Generations initialized standard release.",
+        "content": "Initial SDKWork App Standard v3 manifest for SDKWork Generations.",
+        "highlights": [
+          "SDKWork App Standard v3 configuration initialized",
+          "platform_app projection metadata standardized",
+          "Download package matrix normalized"
+        ],
         "packageIds": [
-          "linux-x64-standalone-server-tar-gz"
-        ]
+          "linux-x64-standalone-server-tar-gz",
+          "linux-x64-cloud-server-tar-gz"
+        ],
+        "publishedAt": "2026-05-07T00:00:00Z",
+        "current": true,
+        "forceUpdate": false,
+        "minSupportedVersion": "0.1.0",
+        "metadata": {}
       }
     ]
   },
@@ -64,6 +213,7 @@
     "deploymentConfig": "etc/sdkwork.deployment.config.json",
     "topologySpec": "specs/topology.spec.json",
     "workflowManifest": "sdkwork.workflow.json",
-    "assetsDependency": "../sdkwork-assets"
+    "assetsDependency": "../sdkwork-assets",
+    "standardOwner": "sdkwork-platform"
   }
 }

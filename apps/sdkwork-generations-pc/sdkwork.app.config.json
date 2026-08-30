@@ -55,7 +55,7 @@
         "type": "ICON",
         "purpose": "PRIMARY",
         "url": "https://cdn.sdkwork.com/apps/sdkwork-generations-pc/assets/icon-1024.png",
-        "platform": "WEB",
+        "platform": "APP",
         "locale": "en-US",
         "width": 1024,
         "height": 1024,
@@ -65,32 +65,35 @@
         "sortOrder": 0,
         "enabled": true,
         "metadata": {
-          "assetOwner": "sdkwork-generations",
-          "source": "drive-media-governed"
+          "generatedPlaceholder": true
         }
       },
-      "platform": []
+      "platform": [],
+      "metadata": {
+        "generatedPlaceholder": true
+      }
     },
     "screenshots": [
       {
-        "id": "sdkwork-generations-pc-desktop-screenshot",
+        "id": "sdkwork-generations-pc-web-screenshot",
         "type": "SCREENSHOT",
         "purpose": "CATALOG_SCREENSHOT",
-        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations-pc/media/desktop-screenshot.png",
-        "platform": "DESKTOP_WINDOWS",
+        "url": "https://cdn.sdkwork.com/apps/sdkwork-generations-pc/media/web-screenshot.png",
+        "platform": "WEB",
         "locale": "en-US",
-        "deviceClass": "DESKTOP",
-        "displayType": "DESKTOP_16_10",
+        "deviceClass": "BROWSER",
+        "displayType": "WEB_DESKTOP",
         "width": 1920,
         "height": 1080,
         "format": "PNG",
         "fileSizeBytes": 1048576,
         "alphaChannel": false,
-        "caption": "SDKWork Generations PC workspace.",
+        "caption": "SDKWork Generations product screenshot.",
         "sortOrder": 0,
         "enabled": true,
         "metadata": {
-          "altText": "SDKWork Generations PC generation history and asset workspace."
+          "generatedPlaceholder": true,
+          "altText": "SDKWork Generations app screenshot."
         }
       }
     ],
@@ -107,11 +110,12 @@
         "format": "PNG",
         "fileSizeBytes": 786432,
         "alphaChannel": false,
-        "caption": "SDKWork Generations PC preview.",
+        "caption": "SDKWork Generations preview.",
         "sortOrder": 0,
         "enabled": true,
         "metadata": {
-          "altText": "SDKWork Generations PC preview cover."
+          "generatedPlaceholder": true,
+          "altText": "SDKWork Generations preview cover."
         }
       }
     ],
@@ -190,7 +194,10 @@
             "releaseArtifact": "web-url"
           },
           "deploymentProfile": "cloud",
-          "runtimeTarget": "browser"
+          "runtimeTarget": "browser",
+          "profileBinding": "fixed",
+          "targetPlatform": "web",
+          "clientArchitecture": "pc-web"
         }
       ],
       "metadata": {
@@ -204,19 +211,20 @@
     "currentVersion": "0.1.0",
     "defaultChannel": "DEV",
     "latest": {
+      "STABLE": "0.1.0",
       "DEV": "0.1.0"
     },
     "notes": [
       {
         "version": "0.1.0",
         "releaseChannel": "DEV",
-        "title": "SDKWork Generations PC 0.1.0",
-        "summary": "Initial SDKWork App Manifest v3 identity for the Generations PC app root.",
-        "content": "Defines the official PC application root, package identity, runtime family, and safe web access package metadata.",
+        "title": "SDKWork Generations 0.1.0",
+        "summary": "SDKWork Generations initialized standard release.",
+        "content": "Initial SDKWork App Standard v3 manifest for SDKWork Generations.",
         "highlights": [
-          "SDKWork App Manifest v3 identity",
-          "PC browser and desktop runtime family",
-          "Standard package and config ownership"
+          "SDKWork App Standard v3 configuration initialized",
+          "platform_app projection metadata standardized",
+          "Download package matrix normalized"
         ],
         "packageIds": [
           "web-universal-cloud-browser-other"
@@ -225,9 +233,7 @@
         "current": true,
         "forceUpdate": false,
         "minSupportedVersion": "0.1.0",
-        "metadata": {
-          "releaseState": "development"
-        }
+        "metadata": {}
       }
     ]
   },
