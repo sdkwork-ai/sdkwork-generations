@@ -1,6 +1,6 @@
 {
   "name": "@sdkwork/generations-backend-sdk",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "SDKWork sdkwork-generations-backend-sdk composed consumer facade.",
   "type": "module",
   "private": false,

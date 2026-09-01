@@ -1,6 +1,6 @@
 {
   "name": "@sdkwork/generations-app-sdk",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "SDKWork composed consumer facade for @sdkwork/generations-app-sdk.",
   "type": "module",
   "private": false,

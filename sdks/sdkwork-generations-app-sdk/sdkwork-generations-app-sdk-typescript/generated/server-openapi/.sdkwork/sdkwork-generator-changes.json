@@ -9,16 +9,10 @@
     "protocol": "http",
     "packageName": "sdkwork-generations-app-sdk-generated-typescript"
   },
-  "changeFingerprint": "7772af96590635d1efc4894368fa9450574c2ee2a0fe3fc5e01f6501a2b49332",
+  "changeFingerprint": "95b3783c80085a9cfb28a4d6957ca8e31a9bc725e4d4d407b5f4f484d795694f",
   "changes": {
-    "createdGeneratedFiles": [
-      "src/api/generations-api.ts"
-    ],
+    "createdGeneratedFiles": [],
     "updatedGeneratedFiles": [
-      "README.md",
-      "src/api/index.ts",
-      "src/sdk.ts",
-      "src/types/media-resource.ts",
       "tsconfig.json"
     ],
     "unchangedGeneratedFiles": [
@@ -30,13 +24,17 @@
       "CHANGELOG.md",
       "LICENSE",
       "package.json",
+      "README.md",
       "sdkwork-sdk.json",
       "src/api/base.ts",
+      "src/api/generations-api.ts",
+      "src/api/index.ts",
       "src/api/paths.ts",
       "src/auth/index.ts",
       "src/http/client.ts",
       "src/http/index.ts",
       "src/index.ts",
+      "src/sdk.ts",
       "src/types/common.ts",
       "src/types/create-generation-command-request.ts",
       "src/types/favorite-generation-request.ts",
@@ -71,6 +69,7 @@
       "src/types/generations-voice-transcription-response202.ts",
       "src/types/generations-voice-translation-response202.ts",
       "src/types/index.ts",
+      "src/types/media-resource.ts",
       "src/types/page-info.ts",
       "src/types/problem-detail.ts",
       "src/types/save-generation-result-to-assets-request.ts",
@@ -83,68 +82,40 @@
       "src/types/sdk-work-resource-data.ts",
       "src/types/sdk-work-resource-response.ts"
     ],
-    "deletedGeneratedFiles": [
-      "src/api/generations.ts"
-    ],
+    "deletedGeneratedFiles": [],
     "scaffoldedFiles": [],
     "preservedScaffoldFiles": [
       "custom/build-runtime.mjs",
       "custom/README.md"
     ],
-    "backedUpFiles": [
-      "tsconfig.json"
-    ]
+    "backedUpFiles": []
   },
   "impact": {
     "schemaVersion": 1,
     "areas": [
-      "api-surface",
-      "models",
-      "build-metadata",
-      "documentation"
+      "build-metadata"
     ],
     "details": [
-      {
-        "area": "api-surface",
-        "paths": [
-          "src/api/generations-api.ts",
-          "src/api/generations.ts",
-          "src/api/index.ts",
-          "src/sdk.ts"
-        ]
-      },
-      {
-        "area": "models",
-        "paths": [
-          "src/types/media-resource.ts"
-        ]
-      },
       {
         "area": "build-metadata",
         "paths": [
           "tsconfig.json"
         ]
-      },
-      {
-        "area": "documentation",
-        "paths": [
-          "README.md"
-        ]
       }
     ],
     "requiresVerification": true,
-    "summary": "Detected impact areas: api-surface, models, build-metadata, documentation. Verification is required."
+    "summary": "Detected impact areas: build-metadata. Verification is required."
   },
   "verificationPlan": {
     "shouldRun": true,
     "runPhase": "now",
-    "summary": "Detected impact areas: api-surface, models, build-metadata, documentation. Verification is required. Run the required verification commands now against the generated SDK output.",
+    "summary": "Detected impact areas: build-metadata. Verification is required. Run the required verification commands now against the generated SDK output.",
     "steps": [
       {
         "id": "check",
         "title": "Unified package check",
         "required": true,
-        "rationale": "Validate the generated package with the unified publish helper. Triggered by: api-surface, models, build-metadata, documentation.",
+        "rationale": "Validate the generated package with the unified publish helper. Triggered by: build-metadata.",
         "workingDirectory": "E:\\sdkwork-space\\sdkwork-generations\\sdks\\sdkwork-generations-app-sdk\\sdkwork-generations-app-sdk-typescript\\generated\\server-openapi",
         "command": "node",
         "args": [
@@ -162,7 +133,7 @@
         "id": "build",
         "title": "Unified package build",
         "required": true,
-        "rationale": "Run the full package build because this language uses a lighter check path than the final build. Triggered by: api-surface, models, build-metadata, documentation.",
+        "rationale": "Run the full package build because this language uses a lighter check path than the final build. Triggered by: build-metadata.",
         "workingDirectory": "E:\\sdkwork-space\\sdkwork-generations\\sdks\\sdkwork-generations-app-sdk\\sdkwork-generations-app-sdk-typescript\\generated\\server-openapi",
         "command": "node",
         "args": [
@@ -180,15 +151,12 @@
   },
   "executionDecision": {
     "schemaVersion": 1,
-    "riskLevel": "high",
+    "riskLevel": "medium",
     "nextAction": "verify",
     "requiresManualReview": false,
     "applyRequiresExpectedFingerprint": false,
     "summary": "Changes have been applied. Run the required verification plan now.",
     "reasons": [
-      "backed-up-generated-files",
-      "deleted-generated-files",
-      "manual-review-required",
       "verification-required"
     ]
   },

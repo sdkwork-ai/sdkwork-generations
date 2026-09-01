@@ -9,11 +9,10 @@
     "protocol": "http",
     "packageName": "sdkwork-generations-backend-sdk-generated-typescript"
   },
-  "changeFingerprint": "8674ecd15ed3ab27f6a308c31554953e31757b3b934376217212ecfeb46e1d5a",
+  "changeFingerprint": "6f79b788f11410687f5d777d3d450c7c032518c275e8c73cf6ac892ef2097f60",
   "changes": {
     "createdGeneratedFiles": [],
     "updatedGeneratedFiles": [
-      "src/api/generations-backend.ts",
       "tsconfig.json"
     ],
     "unchangedGeneratedFiles": [
@@ -28,6 +27,7 @@
       "README.md",
       "sdkwork-sdk.json",
       "src/api/base.ts",
+      "src/api/generations-backend.ts",
       "src/api/index.ts",
       "src/api/paths.ts",
       "src/auth/index.ts",
@@ -65,23 +65,14 @@
       "custom/build-runtime.mjs",
       "custom/README.md"
     ],
-    "backedUpFiles": [
-      "tsconfig.json"
-    ]
+    "backedUpFiles": []
   },
   "impact": {
     "schemaVersion": 1,
     "areas": [
-      "api-surface",
       "build-metadata"
     ],
     "details": [
-      {
-        "area": "api-surface",
-        "paths": [
-          "src/api/generations-backend.ts"
-        ]
-      },
       {
         "area": "build-metadata",
         "paths": [
@@ -90,18 +81,18 @@
       }
     ],
     "requiresVerification": true,
-    "summary": "Detected impact areas: api-surface, build-metadata. Verification is required."
+    "summary": "Detected impact areas: build-metadata. Verification is required."
   },
   "verificationPlan": {
     "shouldRun": true,
     "runPhase": "now",
-    "summary": "Detected impact areas: api-surface, build-metadata. Verification is required. Run the required verification commands now against the generated SDK output.",
+    "summary": "Detected impact areas: build-metadata. Verification is required. Run the required verification commands now against the generated SDK output.",
     "steps": [
       {
         "id": "check",
         "title": "Unified package check",
         "required": true,
-        "rationale": "Validate the generated package with the unified publish helper. Triggered by: api-surface, build-metadata.",
+        "rationale": "Validate the generated package with the unified publish helper. Triggered by: build-metadata.",
         "workingDirectory": "E:\\sdkwork-space\\sdkwork-generations\\sdks\\sdkwork-generations-backend-sdk\\sdkwork-generations-backend-sdk-typescript\\generated\\server-openapi",
         "command": "node",
         "args": [
@@ -119,7 +110,7 @@
         "id": "build",
         "title": "Unified package build",
         "required": true,
-        "rationale": "Run the full package build because this language uses a lighter check path than the final build. Triggered by: api-surface, build-metadata.",
+        "rationale": "Run the full package build because this language uses a lighter check path than the final build. Triggered by: build-metadata.",
         "workingDirectory": "E:\\sdkwork-space\\sdkwork-generations\\sdks\\sdkwork-generations-backend-sdk\\sdkwork-generations-backend-sdk-typescript\\generated\\server-openapi",
         "command": "node",
         "args": [
@@ -137,14 +128,12 @@
   },
   "executionDecision": {
     "schemaVersion": 1,
-    "riskLevel": "high",
+    "riskLevel": "medium",
     "nextAction": "verify",
     "requiresManualReview": false,
     "applyRequiresExpectedFingerprint": false,
     "summary": "Changes have been applied. Run the required verification plan now.",
     "reasons": [
-      "backed-up-generated-files",
-      "manual-review-required",
       "verification-required"
     ]
   },
