@@ -27,6 +27,11 @@ fn parse_web_environment(value: Option<String>) -> WebEnvironment {
     match canonical_lifecycle_environment(value.as_deref().unwrap_or("")).as_str() {
         "development" => WebEnvironment::Dev,
         "test" => WebEnvironment::Test,
+        // Demo is an isolated showcase tier, not production-like: it gets the
+        // relaxed showcase posture instead of production assembly validation.
+        "demo" => WebEnvironment::Test,
+        // Staging/prod keep the strict fail-closed production posture.
+        "staging" | "production" => WebEnvironment::Prod,
         _ => WebEnvironment::Prod,
     }
 }
