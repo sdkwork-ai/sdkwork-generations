@@ -11,15 +11,18 @@
 
 BEGIN;
 
-DROP INDEX IF EXISTS idx_generation_outbox_unpub;
-DROP INDEX IF EXISTS idx_generation_result_gen;
-DROP INDEX IF EXISTS idx_generation_timeline_gen;
+DROP INDEX IF EXISTS idx_generation_outbox_status;
+DROP INDEX IF EXISTS idx_generation_projection_user_modality_updated;
+DROP INDEX IF EXISTS idx_generation_projection_user_status_updated;
+DROP INDEX IF EXISTS idx_generation_projection_user_updated;
+DROP INDEX IF EXISTS idx_generation_result_asset;
+DROP INDEX IF EXISTS idx_generation_result_generation_ordinal;
+DROP INDEX IF EXISTS idx_generation_timeline_generation_created;
 DROP INDEX IF EXISTS idx_generation_source_inbox_status;
+DROP INDEX IF EXISTS ux_generation_source_inbox_provider_event;
+DROP INDEX IF EXISTS idx_generation_dispatch_job_retry;
 DROP INDEX IF EXISTS idx_generation_dispatch_job_lease;
-DROP INDEX IF EXISTS idx_generation_dispatch_job_status;
-DROP INDEX IF EXISTS idx_generation_record_modality;
-DROP INDEX IF EXISTS idx_generation_record_status;
-DROP INDEX IF EXISTS idx_generation_record_tenant;
+DROP INDEX IF EXISTS ux_generation_dispatch_job_idempotency;
 
 DROP TABLE IF EXISTS generation_outbox_event;
 DROP TABLE IF EXISTS generation_record_projection;
