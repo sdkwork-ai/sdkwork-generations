@@ -28,6 +28,10 @@ profiles:
         tls: dtupay.com
         mode: web+api
         web: adaptive
+      - domain: generations-test.noaper.com
+        tls: noaper.com
+        mode: web+api
+        web: adaptive
       - domain: generations-test.sdkwork.cn
         tls: sdkwork.cn
         mode: web+api
@@ -38,6 +42,10 @@ profiles:
         web: adaptive
       - domain: generations-test.dtupay.cn
         tls: dtupay.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations-test.noaper.cn
+        tls: noaper.cn
         mode: web+api
         web: adaptive
       - domain: generations-test.skubc.com
@@ -105,6 +113,10 @@ profiles:
         tls: dtupay.com
         mode: web+api
         web: adaptive
+      - domain: generations-staging.noaper.com
+        tls: noaper.com
+        mode: web+api
+        web: adaptive
       - domain: generations-staging.sdkwork.cn
         tls: sdkwork.cn
         mode: web+api
@@ -115,6 +127,10 @@ profiles:
         web: adaptive
       - domain: generations-staging.dtupay.cn
         tls: dtupay.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations-staging.noaper.cn
+        tls: noaper.cn
         mode: web+api
         web: adaptive
       - domain: generations-staging.skubc.com
@@ -182,6 +198,10 @@ profiles:
         tls: dtupay.com
         mode: web+api
         web: adaptive
+      - domain: generations.noaper.com
+        tls: noaper.com
+        mode: web+api
+        web: adaptive
       - domain: generations.sdkwork.cn
         tls: sdkwork.cn
         mode: web+api
@@ -192,6 +212,10 @@ profiles:
         web: adaptive
       - domain: generations.dtupay.cn
         tls: dtupay.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations.noaper.cn
+        tls: noaper.cn
         mode: web+api
         web: adaptive
       - domain: generations.skubc.com
@@ -259,6 +283,10 @@ profiles:
         tls: dtupay.com
         mode: web+api
         web: adaptive
+      - domain: generations.noaper.com
+        tls: noaper.com
+        mode: web+api
+        web: adaptive
       - domain: generations.sdkwork.cn
         tls: sdkwork.cn
         mode: web+api
@@ -269,6 +297,10 @@ profiles:
         web: adaptive
       - domain: generations.dtupay.cn
         tls: dtupay.cn
+        mode: web+api
+        web: adaptive
+      - domain: generations.noaper.cn
+        tls: noaper.cn
         mode: web+api
         web: adaptive
       - domain: generations.skubc.com
