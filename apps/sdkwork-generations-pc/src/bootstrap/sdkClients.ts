@@ -2,10 +2,7 @@ import {
   createClient as createDriveAppClient,
   type SdkworkDriveAppClient,
 } from "@sdkwork/drive-app-sdk";
-import {
-  createTokenManager,
-  type AuthTokenManager,
-} from "@sdkwork/sdk-common";
+import {createTokenManager, resolveBaseUrlWithAlignProtocol, type AuthTokenManager} from "@sdkwork/sdk-common";
 import type { SdkworkGenerationSdkClients } from "@sdkwork/generations-pc-workspace";
 import {
   createClient as createGenerationsAppClient,
@@ -35,14 +32,25 @@ function readViteEnvValue(name: string): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * Authored per-surface overrides win; the shared fallback resolves through
+ * `@sdkwork/sdk-common` `resolveBaseUrl` (ENVIRONMENT_SPEC.md §6.3): the
+ * unified `SDKWORK_API_BASE_URL` candidates are matched against the current
+ * page host, environment and deployment profile (`pnpm dev` standalone ->
+ * same-origin ip+port, cloud -> local cloud-gateway dev port; built pages ->
+ * same origin (standalone) or `api[-<env>].<brand>` (cloud)).
+ */
 function readGenerationsPcRuntimeConfig(): GenerationsPcRuntimeConfig {
+  const sharedAppApiOrigin = resolveBaseUrlWithAlignProtocol().url || undefined;
   return {
     driveAppApiBaseUrl: readViteEnvValue("VITE_SDKWORK_GENERATIONS_DRIVE_APP_API_BASE_URL")
       ?? readViteEnvValue("VITE_SDKWORK_DRIVE_APP_API_BASE_URL")
       ?? readViteEnvValue("VITE_SDKWORK_GENERATIONS_APP_API_BASE_URL")
-      ?? readViteEnvValue("VITE_SDKWORK_GENERATIONS_PC_APP_API_BASE_URL"),
+      ?? readViteEnvValue("VITE_SDKWORK_GENERATIONS_PC_APP_API_BASE_URL")
+      ?? (sharedAppApiOrigin ? `${sharedAppApiOrigin}/app/v3/api` : undefined),
     generationsAppApiBaseUrl: readViteEnvValue("VITE_SDKWORK_GENERATIONS_APP_API_BASE_URL")
-      ?? readViteEnvValue("VITE_SDKWORK_GENERATIONS_PC_APP_API_BASE_URL"),
+      ?? readViteEnvValue("VITE_SDKWORK_GENERATIONS_PC_APP_API_BASE_URL")
+      ?? (sharedAppApiOrigin ? `${sharedAppApiOrigin}/app/v3/api` : undefined),
   };
 }
 
