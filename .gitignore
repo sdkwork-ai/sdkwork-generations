@@ -64,3 +64,12 @@ sdks/**/*-typescript/generated/**/*.js
 sdks/**/*-typescript/generated/**/*.d.ts
 sdks/**/*-typescript/generated/**/*.js.map
 sdks/**/*-typescript/generated/**/*.d.ts.map
+# --- SDKWork: generated TypeScript SDK build outputs (never committed) ---
+**/generated/server-openapi/src/**/*.js
+**/generated/server-openapi/src/**/*.js.map
+**/generated/server-openapi/src/**/*.d.ts
+**/generated/server-openapi/src/**/*.d.ts.map
+**/composed/**/*.js
+**/composed/**/*.js.map
+**/composed/**/*.d.ts
+**/composed/**/*.d.ts.map
