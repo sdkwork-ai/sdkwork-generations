@@ -54,3 +54,13 @@ Thumbs.db
 # Runtime-generated env config (modified by local dev server)
 **/public/runtime-env.json
 /bin/
+
+# SDK TypeScript compiled build outputs (source is .ts; .js/.d.ts/.map are build artifacts)
+sdks/**/*-typescript/src/*.js
+sdks/**/*-typescript/src/*.d.ts
+sdks/**/*-typescript/src/*.js.map
+sdks/**/*-typescript/src/*.d.ts.map
+sdks/**/*-typescript/generated/**/*.js
+sdks/**/*-typescript/generated/**/*.d.ts
+sdks/**/*-typescript/generated/**/*.js.map
+sdks/**/*-typescript/generated/**/*.d.ts.map
