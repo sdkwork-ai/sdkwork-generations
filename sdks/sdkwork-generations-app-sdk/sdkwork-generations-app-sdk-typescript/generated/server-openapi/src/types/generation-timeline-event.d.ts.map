@@ -1,0 +1,1 @@
+{"version":3,"file":"generation-timeline-event.d.ts","sourceRoot":"","sources":["generation-timeline-event.ts"],"names":[],"mappings":"AAAA,MAAM,WAAW,uBAAuB;IACtC,EAAE,EAAE,MAAM,CAAC;IACX,YAAY,EAAE,MAAM,CAAC;IACrB,SAAS,EAAE,MAAM,CAAC;IAClB,OAAO,CAAC,EAAE,MAAM,CAAC;IACjB,OAAO,CAAC,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,CAAC;IAClC,SAAS,EAAE,MAAM,CAAC;CACnB"}
