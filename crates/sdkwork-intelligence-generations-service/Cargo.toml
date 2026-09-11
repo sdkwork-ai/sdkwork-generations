@@ -1,10 +1,14 @@
 [package]
+rust-version.workspace = true
 name = "sdkwork-intelligence-generations-service"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Business service crate for sdkwork-generations."
 
+
+[lints]
+workspace = true
 [lib]
 name = "sdkwork_intelligence_generations_service"
 path = "src/lib.rs"

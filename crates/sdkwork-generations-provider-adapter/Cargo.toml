@@ -1,10 +1,14 @@
 [package]
+rust-version.workspace = true
 name = "sdkwork-generations-provider-adapter"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Vendor adapters that dispatch sdkwork-generations commands through the cloudrouter Rust SDK."
 
+
+[lints]
+workspace = true
 [dependencies]
 sdkwork-intelligence-generations-service.workspace = true
 cloudrouter-open-sdk.workspace = true

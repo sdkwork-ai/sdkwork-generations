@@ -1,10 +1,14 @@
 [package]
+rust-version.workspace = true
 name = "sdkwork-routes-generations-http-shared"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Shared HTTP route manifests for sdkwork-generations surfaces."
 
+
+[lints]
+workspace = true
 [lib]
 name = "sdkwork_routes_generations_http_shared"
 path = "src/lib.rs"

@@ -40,5 +40,13 @@
   "standardProfile": "sdkwork-v3",
   "fixedSdkVersion": "0.1.0",
   "ownerOnlyOperationCount": 4,
-  "managedBy": "tools/generations_sdk_generator_runner.mjs"
+  "managedBy": "tools/generations_sdk_generator_runner.mjs",
+  "packageName": "@sdkwork/generations-backend-sdk",
+  "transportPackageName": "sdkwork-generations-backend-sdk-generated-typescript",
+  "typescript": {
+    "composedRoot": "sdkwork-generations-backend-sdk-typescript",
+    "composedEntry": "sdkwork-generations-backend-sdk-typescript/src/index.ts",
+    "transportRoot": "sdkwork-generations-backend-sdk-typescript/generated/server-openapi",
+    "transportEntry": "sdkwork-generations-backend-sdk-typescript/generated/server-openapi/src/index.ts"
+  }
 }

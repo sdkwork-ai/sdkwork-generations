@@ -1,10 +1,14 @@
 [package]
+rust-version.workspace = true
 name = "sdkwork-generations-mcp-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Model Context Protocol adapter exposing sdkwork-generations media capabilities to chat agents."
 
+
+[lints]
+workspace = true
 [dependencies]
 rmcp.workspace = true
 schemars.workspace = true
