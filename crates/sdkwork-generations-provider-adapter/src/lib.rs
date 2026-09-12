@@ -4,8 +4,9 @@
 //! and calls vendor open APIs through the generated cloudrouter Rust SDK
 //! (`cloudrouter_open_sdk::SdkworkAiClient`). Vendor surfaces that are not yet
 //! bound in the generated SDK (Kling image generation, Volcengine image
-//! generation) travel through the SDK's authenticated HTTP transport with
-//! typed request/response models owned by this crate.
+//! generation, Google Veo video generation) travel through the SDK's
+//! authenticated HTTP transport with typed request/response models owned by
+//! this crate.
 
 pub mod gateway;
 pub mod image;
@@ -110,11 +111,14 @@ pub(crate) fn task_event(record: &GenerationRecord, task_id: &str) -> Generation
 }
 
 /// Normalize a provider task status into the generation status enum.
+///
+/// Vendor vocabularies differ: Kling reports `succeed`, OpenAI reports
+/// `completed`, nano-banana reports `success`; all three must reach the
+/// terminal succeeded state.
 pub(crate) fn status_from_vendor(status: Option<&str>) -> GenerationStatus {
     match status.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-        Some("succeeded") | Some("completed") | Some("success") | Some("complete") => {
-            GenerationStatus::Succeeded
-        }
+        Some("succeeded") | Some("succeed") | Some("completed") | Some("success")
+        | Some("complete") => GenerationStatus::Succeeded,
         Some("failed") | Some("error") | Some("expired") => GenerationStatus::Failed,
         Some("queued") | Some("pending") | Some("submitted") => GenerationStatus::Queued,
         _ => GenerationStatus::Running,
@@ -134,4 +138,12 @@ pub(crate) fn task_error_message(error: &cloudrouter_open_sdk::models::ProviderT
         (None, Some(message)) => message.to_string(),
         (None, None) => "unknown vendor task error".to_string(),
     }
+}
+
+/// Copies the resolved vendor onto the record so the refresh path routes
+/// polling to the surface that dispatched the task.
+pub(crate) fn with_resolved_vendor(record: &GenerationRecord, vendor: &str) -> GenerationRecord {
+    let mut resolved = record.clone();
+    resolved.source_provider = Some(vendor.to_string());
+    resolved
 }

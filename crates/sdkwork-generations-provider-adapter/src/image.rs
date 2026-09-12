@@ -25,7 +25,7 @@ use sdkwork_intelligence_generations_service::ports::{
 use crate::gateway::{MediaSdkGateway, VolcengineImageGenerationRequest};
 use crate::{
     failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome,
-    task_event,
+    task_event, with_resolved_vendor,
 };
 use crate::usage::{usage_from_media, usage_from_openai_image_list, MediaUsageKind};
 use crate::vendor::{resolve_vendor, GenerationCommandInputs, VendorSelection};
@@ -68,15 +68,19 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command);
+        // The refresh path routes polling by record.source_provider; persist
+        // the resolved vendor so the same surface that dispatched the task
+        // also polls it, even when it differs from the adapter default.
+        let record = with_resolved_vendor(record, &selection.vendor);
         match selection.vendor.as_str() {
             "openai" | "midjourney" => {
-                self::surfaces::dispatch_openai(self, record, &selection, &inputs).await
+                self::surfaces::dispatch_openai(self, &record, &selection, &inputs).await
             }
-            "nano-banana" => self::surfaces::dispatch_nano_banana(self, record, &selection, &inputs).await,
-            "vidu" => self::surfaces::dispatch_vidu(self, record, &selection, &inputs).await,
-            "kling" => self::surfaces::dispatch_kling(self, record, &selection, &inputs).await,
+            "nano-banana" => self::surfaces::dispatch_nano_banana(self, &record, &selection, &inputs).await,
+            "vidu" => self::surfaces::dispatch_vidu(self, &record, &selection, &inputs).await,
+            "kling" => self::surfaces::dispatch_kling(self, &record, &selection, &inputs).await,
             "volcengine" | "jimeng" => {
-                self::surfaces::dispatch_volcengine(self, record, &selection, &inputs).await
+                self::surfaces::dispatch_volcengine(self, &record, &selection, &inputs).await
             }
             other => Err(GenerationsError::Provider(format!(
                 "image vendor {other:?} is not supported by the generations provider adapter"
@@ -179,7 +183,6 @@ mod surfaces {
                 mask: None,
                 model: model.clone(),
                 prompt: inputs.prompt.clone(),
-                ..Default::default()
             };
             let list = adapter
                 .gateway

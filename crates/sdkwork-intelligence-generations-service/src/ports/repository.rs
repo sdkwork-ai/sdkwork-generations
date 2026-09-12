@@ -99,6 +99,9 @@ pub struct UpdateGenerationProviderStateParams {
     pub id: String,
     pub status: Option<String>,
     pub source_job_id: Option<String>,
+    /// Vendor surface that owns the task; the refresh path routes polling by
+    /// this column, so async vendors persist the resolved vendor here.
+    pub source_provider: Option<String>,
     pub result_count: Option<i32>,
     pub error_code: Option<String>,
     pub error_message: Option<String>,

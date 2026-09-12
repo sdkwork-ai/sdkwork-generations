@@ -259,7 +259,7 @@ mod sfx_tests {
     use cloudrouter_open_sdk::models::ElevenLabsSoundGenerationResponse;
     use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
     use sdkwork_intelligence_generations_service::domain::models::{
-        CreateGenerationCommandRequest, GenerationModality, GenerationStatus,
+        CreateGenerationCommandRequest, GenerationStatus,
     };
     use sdkwork_intelligence_generations_service::ports::GenerationProvider;
 

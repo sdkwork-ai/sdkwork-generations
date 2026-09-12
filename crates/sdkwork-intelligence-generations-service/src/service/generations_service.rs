@@ -534,7 +534,7 @@ fn resolve_provider<'a>(
 ) -> Result<&'a dyn GenerationProvider, GenerationsError> {
     for provider in state.providers().iter() {
         if provider.modality() == *modality
-            && provider.operation_types().iter().any(|op| *op == operation_type)
+            && provider.operation_types().contains(&operation_type)
         {
             return Ok(provider.as_ref());
         }
@@ -589,6 +589,7 @@ pub async fn persist_outcome(
             id: generation_id.clone(),
             status: Some(outcome.record.status.to_string()),
             source_job_id: outcome.record.source_job_id.clone(),
+            source_provider: outcome.record.source_provider.clone(),
             result_count: Some(result_count as i32),
             ..Default::default()
         })
@@ -673,4 +674,5 @@ fn command_metadata(command: &CreateGenerationCommandRequest) -> serde_json::Val
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
+
 

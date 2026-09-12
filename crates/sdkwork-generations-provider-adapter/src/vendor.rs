@@ -64,10 +64,14 @@ pub fn resolve_vendor(command: &CreateGenerationCommandRequest, default_vendor: 
 }
 
 /// Normalize a vendor alias into the canonical slug.
+///
+/// The Google family (Gemini image via nano-banana, Veo video) collapses onto
+/// `nano-banana`; the modality adapters map that slug onto their own Google
+/// surface.
 pub fn normalize_vendor(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "google" | "gemini" => VENDOR_NANO_BANANA.to_string(),
+        "google" | "gemini" | "veo" => VENDOR_NANO_BANANA.to_string(),
         "bytedance" | "byte_dance" | "volces" | "ark" | "doubao" | "seedream" | "seedance" => {
             VENDOR_VOLCENGINE.to_string()
         }

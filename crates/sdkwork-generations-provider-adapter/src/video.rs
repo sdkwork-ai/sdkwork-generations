@@ -1,8 +1,9 @@
 //! Video generation vendor adapters.
 //!
 //! Supported vendor surfaces: OpenAI video (create/extend), Kling video
-//! generation, Vidu text/image/start-end to video, and Volcengine content
-//! generation tasks.
+//! generation, Vidu text/image/start-end to video, Volcengine content
+//! generation tasks, and Google Veo (`generateVideos` long-running
+//! operations).
 
 use std::sync::Arc;
 
@@ -22,10 +23,10 @@ use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
 
-use crate::gateway::MediaSdkGateway;
+use crate::gateway::{GeminiVideoGenerationRequest, GeminiVideoInstance, GeminiVideoParameters, MediaSdkGateway};
 use crate::usage::{usage_from_media, usage_from_vidu_creations, MediaUsageKind};
 use crate::vendor::{resolve_vendor, GenerationCommandInputs};
-use crate::{failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome, task_event};
+use crate::{failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome, task_event, with_resolved_vendor};
 
 /// Video generation provider dispatching through the media gateway.
 pub struct VideoGenerationProviderAdapter {
@@ -65,11 +66,16 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command);
+        // The refresh path routes polling by record.source_provider; persist
+        // the resolved vendor so the same surface that dispatched the task
+        // also polls it, even when it differs from the adapter default.
+        let record = with_resolved_vendor(record, &selection.vendor);
         match selection.vendor.as_str() {
-            "openai" => dispatch_openai(self, record, &inputs).await,
-            "kling" => dispatch_kling(self, record, &inputs).await,
-            "vidu" => dispatch_vidu(self, record, &inputs).await,
-            "volcengine" | "jimeng" => dispatch_volcengine(self, record, &inputs).await,
+            "openai" => dispatch_openai(self, &record, &inputs).await,
+            "nano-banana" | "veo" => dispatch_gemini(self, &record, &inputs).await,
+            "kling" => dispatch_kling(self, &record, &inputs).await,
+            "vidu" => dispatch_vidu(self, &record, &inputs).await,
+            "volcengine" | "jimeng" => dispatch_volcengine(self, &record, &inputs).await,
             other => Err(GenerationsError::Provider(format!(
                 "video vendor {other:?} is not supported by the generations provider adapter"
             ))),
@@ -93,6 +99,14 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .await
                     .map_err(|error| GenerationsError::Provider(error.to_string()))?;
                 Ok(Some(outcome_from_openai_video(record, &video)))
+            }
+            "nano-banana" | "veo" | "google" | "gemini" => {
+                let operation = self
+                    .gateway
+                    .gemini_retrieve_video_operation(task_id)
+                    .await
+                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                Ok(Some(outcome_from_gemini_operation(record, &operation, &inputs)))
             }
             "kling" => {
                 let task = self
@@ -127,7 +141,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     _ => pending_outcome(record, task_id, Vec::new()),
                 }))
             }
-            "volcengine" => {
+            "volcengine" | "jimeng" => {
                 let task = self
                     .gateway
                     .volcengine_retrieve_video_task(task_id)
@@ -195,6 +209,103 @@ async fn dispatch_openai(
         .await
         .map_err(|error| GenerationsError::Provider(error.to_string()))?;
     Ok(outcome_from_openai_video(record, &video))
+}
+
+async fn dispatch_gemini(
+    adapter: &VideoGenerationProviderAdapter,
+    record: &GenerationRecord,
+    inputs: &GenerationCommandInputs,
+) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    if record.operation_type == "video_extend" {
+        return Err(GenerationsError::InvalidInput(
+            "veo does not support video_extend".to_string(),
+        ));
+    }
+    if record.operation_type == "image_to_video" {
+        return Err(GenerationsError::InvalidInput(
+            "veo image_to_video requires base64-encoded image input, which generation commands do not carry; use text_to_video".to_string(),
+        ));
+    }
+    let model = model_or_default(inputs, "veo-3.0-generate-001");
+    let parameters = GeminiVideoParameters {
+        aspect_ratio: inputs.aspect_ratio.clone(),
+        duration_seconds: inputs.duration_seconds.map(|value| value as i64),
+        person_generation: None,
+    };
+    let request = GeminiVideoGenerationRequest {
+        instances: vec![GeminiVideoInstance {
+            prompt: inputs.prompt.clone(),
+            image: None,
+        }],
+        parameters: Some(parameters),
+    };
+    let operation = adapter
+        .gateway
+        .gemini_create_video_generation(&model, &request)
+        .await
+        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+    Ok(outcome_from_gemini_operation(record, &operation, inputs))
+}
+
+/// Builds the dispatch outcome for a Veo long-running operation envelope:
+/// finished with media becomes a succeeded outcome, a finished error becomes
+/// a failure, and anything else stays pending on the operation name.
+fn outcome_from_gemini_operation(
+    record: &GenerationRecord,
+    operation: &crate::gateway::GeminiVideoOperation,
+    inputs: &GenerationCommandInputs,
+) -> GenerationDispatchOutcome {
+    if operation.done {
+        if let Some(error) = operation.error.as_ref() {
+            return failed_outcome(
+                record,
+                &error
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "veo video operation failed".to_string()),
+            );
+        }
+        let uris = operation.video_uris();
+        if uris.is_empty() {
+            return failed_outcome(
+                record,
+                &operation.filtered_reason()
+                    .unwrap_or_else(|| "veo video operation finished without media".to_string()),
+            );
+        }
+        let results = uris
+            .iter()
+            .map(|uri| video_result(record, uri))
+            .collect();
+        let mut usage = GenerationUsage::new("google");
+        usage.model = record
+            .source_job_id
+            .as_deref()
+            .and_then(extract_model_from_operation_name);
+        usage.video_seconds = inputs.duration_seconds.unwrap_or(0.0);
+        succeeded_outcome(record, results, Some(usage), Vec::new())
+    } else {
+        let Some(operation_name) = operation
+            .operation_name()
+            .map(str::to_owned)
+            .or_else(|| record.source_job_id.clone())
+        else {
+            return failed_outcome(record, "veo operation response is missing name");
+        };
+        pending_outcome(record, &operation_name, vec![task_event(record, &operation_name)])
+    }
+}
+
+/// Extracts the model id from a Veo operation resource name
+/// (`models/{model}/operations/{operation}`).
+fn extract_model_from_operation_name(operation_name: &str) -> Option<String> {
+    let trimmed = operation_name.trim().trim_start_matches('/');
+    let model = trimmed
+        .strip_prefix("models/")?
+        .split('/')
+        .next()?
+        .trim();
+    (!model.is_empty()).then(|| model.to_owned())
 }
 
 async fn dispatch_kling(
@@ -521,5 +632,318 @@ fn model_or_default(inputs: &GenerationCommandInputs, default: &str) -> String {
         default.to_string()
     } else {
         inputs.model.clone()
+    }
+}
+
+#[cfg(test)]
+mod video_lifecycle_tests {
+    use std::sync::Arc;
+
+    use cloudrouter_open_sdk::models::{
+        KlingVideoGenerationTask, OpenAiVideo, ProviderGeneratedMedia,
+    };
+    use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
+    use sdkwork_intelligence_generations_service::domain::models::{
+        CreateGenerationCommandRequest, GenerationModality, GenerationStatus,
+    };
+    use sdkwork_intelligence_generations_service::ports::GenerationProvider;
+
+    use crate::gateway::{
+        test_support::ScriptedGateway, GeminiVideoAsset, GeminiVideoGenerateResponse,
+        GeminiVideoOperation, GeminiVideoOperationResponse, GeminiVideoSample,
+    };
+    use crate::video::VideoGenerationProviderAdapter;
+
+    const OPERATION_NAME: &str = "models/veo-3.0-generate-001/operations/op-1";
+
+    fn sample_record(operation_type: &str) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+        sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+            id: "gen-1".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            organization_id: None,
+            user_id: "user-1".to_string(),
+            modality: GenerationModality::Video,
+            operation_type: operation_type.to_string(),
+            source_provider: Some("openai".to_string()),
+            source_job_id: None,
+            prompt_preview: Some("gen".to_string()),
+            status: GenerationStatus::Queued,
+            favorite: false,
+            result_count: 0,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn command(model: &str) -> CreateGenerationCommandRequest {
+        CreateGenerationCommandRequest {
+            tenant_id: "tenant-1".to_string(),
+            organization_id: None,
+            prompt: "a drone shot over rice terraces".to_string(),
+            model: Some(model.to_string()),
+            input_asset_ids: None,
+            parameters: None,
+        }
+    }
+
+    fn context() -> GenerationsRequestContext {
+        GenerationsRequestContext::from_parts(
+            "tenant-1".to_string(),
+            "user-1".to_string(),
+            "trace-1".to_string(),
+        )
+    }
+
+    fn pending_operation() -> GeminiVideoOperation {
+        GeminiVideoOperation {
+            name: Some(OPERATION_NAME.to_string()),
+            done: false,
+            response: None,
+            error: None,
+        }
+    }
+
+    fn finished_operation() -> GeminiVideoOperation {
+        GeminiVideoOperation {
+            name: Some(OPERATION_NAME.to_string()),
+            done: true,
+            response: Some(GeminiVideoOperationResponse {
+                generate_video_response: Some(GeminiVideoGenerateResponse {
+                    generated_samples: Some(vec![GeminiVideoSample {
+                        video: Some(GeminiVideoAsset {
+                            uri: Some("https://cdn.example/veo.mp4".to_string()),
+                            url: None,
+                        }),
+                        gcs_uri: None,
+                        uri: None,
+                        url: None,
+                    }]),
+                    videos: None,
+                    rai_media_filtered_reasons: None,
+                }),
+            }),
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn veo_text_to_video_dispatch_pends_on_operation_name_and_persists_vendor() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.gemini_video_operation.lock().unwrap() = Some(pending_operation());
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_video"),
+                &command("google/veo-3.0-generate-001"),
+                &context(),
+            )
+            .await
+            .expect("veo dispatch succeeds");
+
+        let (model, request) = gateway
+            .last_gemini_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("gemini request captured");
+        assert_eq!(model, "veo-3.0-generate-001");
+        assert_eq!(request.instances.len(), 1);
+        assert_eq!(request.instances[0].prompt, "a drone shot over rice terraces");
+
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(
+            outcome.record.source_job_id.as_deref(),
+            Some(OPERATION_NAME),
+            "the full operation name is the polling identifier"
+        );
+        assert_eq!(
+            outcome.record.source_provider.as_deref(),
+            Some("nano-banana"),
+            "the resolved vendor replaces the adapter default for refresh routing"
+        );
+    }
+
+    #[tokio::test]
+    async fn veo_retrieve_finished_operation_collects_video_urls() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.gemini_video_operation.lock().unwrap() = Some(finished_operation());
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut record = sample_record("text_to_video");
+        record.source_provider = Some("nano-banana".to_string());
+        record.source_job_id = Some(OPERATION_NAME.to_string());
+        let outcome = provider
+            .retrieve(&record, &context())
+            .await
+            .expect("veo retrieve succeeds")
+            .expect("veo retrieve produces an outcome");
+
+        assert_eq!(
+            gateway
+                .last_gemini_video_operation_name
+                .lock()
+                .unwrap()
+                .as_deref(),
+            Some(OPERATION_NAME),
+            "the stored operation name is polled verbatim"
+        );
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(outcome.results.len(), 1);
+        let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
+        assert_eq!(snapshot.url.as_deref(), Some("https://cdn.example/veo.mp4"));
+    }
+
+    #[tokio::test]
+    async fn veo_image_to_video_is_rejected_with_guidance() {
+        let provider = VideoGenerationProviderAdapter::new(Arc::new(ScriptedGateway::default()), "openai");
+        let mut command = command("google/veo-3.0-generate-001");
+        command.parameters = Some(serde_json::json!({
+            "referenceImages": [{ "url": "https://cdn.example/first-frame.png" }]
+        }));
+        let error = provider
+            .dispatch(&sample_record("image_to_video"), &command, &context())
+            .await
+            .expect_err("veo image_to_video must fail closed");
+        assert!(error.to_string().contains("base64"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn veo_safety_filtered_operation_fails_with_reason() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.gemini_video_operation.lock().unwrap() = Some(GeminiVideoOperation {
+            name: Some(OPERATION_NAME.to_string()),
+            done: true,
+            response: Some(GeminiVideoOperationResponse {
+                generate_video_response: Some(GeminiVideoGenerateResponse {
+                    generated_samples: None,
+                    videos: None,
+                    rai_media_filtered_reasons: Some(vec!["PROHIBITED_CONTENT".to_string()]),
+                }),
+            }),
+            error: None,
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut record = sample_record("text_to_video");
+        record.source_provider = Some("nano-banana".to_string());
+        record.source_job_id = Some(OPERATION_NAME.to_string());
+        let outcome = provider
+            .retrieve(&record, &context())
+            .await
+            .expect("veo retrieve succeeds")
+            .expect("veo retrieve produces an outcome");
+        assert_eq!(outcome.record.status, GenerationStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn kling_video_task_lifecycle_pends_then_collects_media() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.kling_video_create_task.lock().unwrap() = Some(KlingVideoGenerationTask {
+            task_id: Some("kling-task-7".to_string()),
+            state: Some("submitted".to_string()),
+            ..Default::default()
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut kling_command = command("kling/kling-v2-master");
+        kling_command.parameters = Some(serde_json::json!({
+            "generationConfig": { "durationSeconds": 8 }
+        }));
+        let created = provider
+            .dispatch(
+                &sample_record("text_to_video"),
+                &kling_command,
+                &context(),
+            )
+            .await
+            .expect("kling dispatch pends");
+        assert_eq!(created.record.status, GenerationStatus::Running);
+        assert_eq!(created.record.source_job_id.as_deref(), Some("kling-task-7"));
+        assert_eq!(
+            created.record.source_provider.as_deref(),
+            Some("kling"),
+            "the resolved vendor replaces the adapter default for refresh routing"
+        );
+        let request = gateway
+            .last_kling_video_create_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("kling request captured");
+        assert_eq!(request.prompt, "a drone shot over rice terraces");
+        assert_eq!(request.duration, Some(8));
+
+        *gateway.kling_video_retrieve_task.lock().unwrap() = Some(KlingVideoGenerationTask {
+            task_id: Some("kling-task-7".to_string()),
+            state: Some("succeed".to_string()),
+            videos: Some(vec![ProviderGeneratedMedia {
+                url: Some("https://cdn.example/kling-final.mp4".to_string()),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
+        let outcome = provider
+            .retrieve(&created.record, &context())
+            .await
+            .expect("kling retrieve succeeds")
+            .expect("kling retrieve produces an outcome");
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(
+            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            Some("https://cdn.example/kling-final.mp4")
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_video_task_lifecycle_pends_then_collects_media() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.openai_video_create.lock().unwrap() = Some(OpenAiVideo {
+            id: "video-42".to_string(),
+            status: "queued".to_string(),
+            model: Some("sora-2".to_string()),
+            seconds: Some(8),
+            content_url: None,
+            url: None,
+            ..Default::default()
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let created = provider
+            .dispatch(
+                &sample_record("text_to_video"),
+                &command("openai/sora-2"),
+                &context(),
+            )
+            .await
+            .expect("openai video dispatch pends");
+        assert_eq!(
+            created.record.status,
+            GenerationStatus::Queued,
+            "the vendor 'queued' status maps onto the generation status verbatim"
+        );
+        assert_eq!(created.record.source_job_id.as_deref(), Some("video-42"));
+
+        *gateway.openai_video_retrieve.lock().unwrap() = Some(OpenAiVideo {
+            id: "video-42".to_string(),
+            status: "completed".to_string(),
+            model: Some("sora-2".to_string()),
+            seconds: Some(8),
+            content_url: Some("https://cdn.example/sora-final.mp4".to_string()),
+            url: None,
+            ..Default::default()
+        });
+        let outcome = provider
+            .retrieve(&created.record, &context())
+            .await
+            .expect("openai video retrieve succeeds")
+            .expect("openai video retrieve produces an outcome");
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(outcome.results.len(), 1);
+        assert_eq!(
+            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            Some("https://cdn.example/sora-final.mp4")
+        );
     }
 }

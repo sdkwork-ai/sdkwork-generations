@@ -337,9 +337,10 @@ mod repository {
                 UPDATE generation_record SET
                     status = COALESCE($2, status),
                     source_job_id = COALESCE($3, source_job_id),
-                    result_count = COALESCE($4, result_count),
-                    error_code = CASE WHEN $6 THEN NULL ELSE COALESCE($5, error_code) END,
-                    error_message = CASE WHEN $6 THEN NULL ELSE COALESCE($7, error_message) END,
+                    source_provider = COALESCE($4, source_provider),
+                    result_count = COALESCE($5, result_count),
+                    error_code = CASE WHEN $7 THEN NULL ELSE COALESCE($6, error_code) END,
+                    error_message = CASE WHEN $7 THEN NULL ELSE COALESCE($8, error_message) END,
                     completed_at = CASE
                         WHEN $2 IN ('succeeded', 'failed', 'canceled') THEN CURRENT_TIMESTAMP
                         ELSE completed_at
@@ -351,6 +352,7 @@ mod repository {
             .bind(&params.id)
             .bind(&params.status)
             .bind(&params.source_job_id)
+            .bind(&params.source_provider)
             .bind(params.result_count)
             .bind(&params.error_code)
             .bind(params.clear_error)

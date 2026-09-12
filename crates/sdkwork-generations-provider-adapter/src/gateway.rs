@@ -3,8 +3,9 @@
 //! [`MediaSdkGateway`] is the seam the vendor adapters depend on; the
 //! production implementation wraps [`cloudrouter_open_sdk::SdkworkAiClient`].
 //! Vendor surfaces that are not yet bound in the generated SDK (Kling image
-//! generation, Volcengine image generation) are issued through the SDK's
-//! authenticated HTTP transport with request/response models owned here.
+//! generation, Volcengine image generation, Google Veo video generation) are
+//! issued through the SDK's authenticated HTTP transport with request/response
+//! models owned here.
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::api::paths::ai_path;
@@ -275,6 +276,27 @@ pub trait MediaSdkGateway: Send + Sync {
         &self,
         task_id: &str,
     ) -> Result<VolcengineContentGenerationTask, SdkworkError> {
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn gemini_create_video_generation(
+        &self,
+        model: &str,
+        body: &GeminiVideoGenerationRequest,
+    ) -> Result<GeminiVideoOperation, SdkworkError> {
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn gemini_retrieve_video_operation(
+        &self,
+        operation_name: &str,
+    ) -> Result<GeminiVideoOperation, SdkworkError> {
         Err(SdkworkError::HttpStatus {
             status: 599,
             body: "gateway method not wired in this test double".to_string(),
@@ -567,6 +589,31 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
             .await
     }
 
+    async fn gemini_create_video_generation(
+        &self,
+        model: &str,
+        body: &GeminiVideoGenerationRequest,
+    ) -> Result<GeminiVideoOperation, SdkworkError> {
+        let path = format!(
+            "/google/v1beta/models/{}:generateVideos",
+            encode_path_segment(model)
+        );
+        self.client
+            .http_client()
+            .post(&ai_path(&path), Some(body), None, None, Some("application/json"))
+            .await
+    }
+
+    async fn gemini_retrieve_video_operation(
+        &self,
+        operation_name: &str,
+    ) -> Result<GeminiVideoOperation, SdkworkError> {
+        // The long-running operation name is a relative resource path
+        // (`models/{model}/operations/{id}`); its separators must survive.
+        let path = format!("/google/v1beta/{}", operation_name.trim().trim_start_matches('/'));
+        self.client.http_client().get(&ai_path(&path), None, None).await
+    }
+
     async fn suno_create_music_generation(
         &self,
         body: &SunoMusicGenerationRequest,
@@ -601,6 +648,154 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
     ) -> Result<OpenAiAudioTranslation, SdkworkError> {
         self.client.audio().create_translation(body).await
     }
+}
+
+/// One Veo generation instance in the Gemini `generateVideos` envelope.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoInstance {
+    pub prompt: String,
+    /// Optional reference image. The Gemini API expects base64-encoded bytes
+    /// (`image.bytesBase64Encoded`); the generations command plane carries
+    /// image URLs only, so image-to-video instances are rejected upstream of
+    /// this envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<serde_json::Value>,
+}
+
+/// Tuning parameters for a Veo generation request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoParameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "durationSeconds")]
+    pub duration_seconds: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_generation: Option<String>,
+}
+
+/// Google Veo video generation request (`models/{model}:generateVideos`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoGenerationRequest {
+    pub instances: Vec<GeminiVideoInstance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<GeminiVideoParameters>,
+}
+
+/// Generated video sample returned by a finished Veo operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoSample {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<GeminiVideoAsset>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "gcsUri")]
+    pub gcs_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoAsset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoOperationResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "generateVideoResponse")]
+    pub generate_video_response: Option<GeminiVideoGenerateResponse>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoGenerateResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "generatedSamples")]
+    pub generated_samples: Option<Vec<GeminiVideoSample>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub videos: Option<Vec<GeminiVideoSample>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "raiMediaFilteredReasons")]
+    pub rai_media_filtered_reasons: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoOperationError {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Google Veo long-running operation envelope (`name`/`done`/`response`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiVideoOperation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub done: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<GeminiVideoOperationResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<GeminiVideoOperationError>,
+}
+
+impl GeminiVideoOperation {
+    /// Operation resource name, usable as the polling identifier.
+    pub fn operation_name(&self) -> Option<&str> {
+        self.name.as_deref().filter(|value| !value.trim().is_empty())
+    }
+
+    /// Video URIs from a finished operation, if any.
+    pub fn video_uris(&self) -> Vec<String> {
+        let Some(response) = self.response.as_ref() else {
+            return Vec::new();
+        };
+        let Some(generate_video_response) = response.generate_video_response.as_ref() else {
+            return Vec::new();
+        };
+        let samples = generate_video_response
+            .generated_samples
+            .as_ref()
+            .or(generate_video_response.videos.as_ref());
+        samples
+            .into_iter()
+            .flatten()
+            .filter_map(|sample| {
+                sample
+                    .video
+                    .as_ref()
+                    .and_then(|video| video.uri.clone().or_else(|| video.url.clone()))
+                    .or_else(|| sample.uri.clone())
+                    .or_else(|| sample.url.clone())
+                    .or_else(|| sample.gcs_uri.clone())
+            })
+            .filter(|uri| !uri.trim().is_empty())
+            .collect()
+    }
+
+    /// Safety-filter failure message when the operation finished without media.
+    pub fn filtered_reason(&self) -> Option<String> {
+        self.response
+            .as_ref()
+            .and_then(|response| response.generate_video_response.as_ref())
+            .and_then(|generate_video_response| generate_video_response.rai_media_filtered_reasons.as_ref())
+            .and_then(|reasons| reasons.first().cloned())
+    }
+}
+
+/// Percent-encodes a single path segment, preserving the unreserved set so
+/// gateway model ids travel without ambiguation.
+fn encode_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.trim().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    encoded
 }
 
 /// Kling image generation request (native Kling open API shape).
@@ -697,6 +892,17 @@ pub mod test_support {
         pub openai_image_generation: Mutex<Option<OpenAiImageList>>,
         pub last_openai_image_request: Mutex<Option<OpenAiImageGenerationRequest>>,
         pub elevenlabs_sound_generation: Mutex<Option<ElevenLabsSoundGenerationResponse>>,
+        pub gemini_video_operation: Mutex<Option<GeminiVideoOperation>>,
+        pub last_gemini_video_request: Mutex<Option<(String, GeminiVideoGenerationRequest)>>,
+        pub last_gemini_video_operation_name: Mutex<Option<String>>,
+        pub nano_banana_create_task: Mutex<Option<NanoBananaImageGenerationTask>>,
+        pub last_nano_banana_create_request: Mutex<Option<NanoBananaImageGenerationRequest>>,
+        pub nano_banana_retrieve_task: Mutex<Option<NanoBananaImageGenerationTask>>,
+        pub kling_video_create_task: Mutex<Option<KlingVideoGenerationTask>>,
+        pub last_kling_video_create_request: Mutex<Option<KlingVideoGenerationRequest>>,
+        pub kling_video_retrieve_task: Mutex<Option<KlingVideoGenerationTask>>,
+        pub openai_video_create: Mutex<Option<OpenAiVideo>>,
+        pub openai_video_retrieve: Mutex<Option<OpenAiVideo>>,
     }
 
     impl Default for ScriptedGateway {
@@ -705,6 +911,17 @@ pub mod test_support {
                 openai_image_generation: Mutex::new(None),
                 last_openai_image_request: Mutex::new(None),
                 elevenlabs_sound_generation: Mutex::new(None),
+                gemini_video_operation: Mutex::new(None),
+                last_gemini_video_request: Mutex::new(None),
+                last_gemini_video_operation_name: Mutex::new(None),
+                nano_banana_create_task: Mutex::new(None),
+                last_nano_banana_create_request: Mutex::new(None),
+                nano_banana_retrieve_task: Mutex::new(None),
+                kling_video_create_task: Mutex::new(None),
+                last_kling_video_create_request: Mutex::new(None),
+                kling_video_retrieve_task: Mutex::new(None),
+                openai_video_create: Mutex::new(None),
+                openai_video_retrieve: Mutex::new(None),
             }
         }
     }
@@ -738,6 +955,120 @@ pub mod test_support {
                 .ok_or_else(|| SdkworkError::HttpStatus {
                     status: 599,
                     body: "no scripted elevenlabs sound generation response".to_string(),
+                })
+        }
+
+        async fn gemini_create_video_generation(
+            &self,
+            model: &str,
+            body: &GeminiVideoGenerationRequest,
+        ) -> Result<GeminiVideoOperation, SdkworkError> {
+            *self.last_gemini_video_request.lock().unwrap() = Some((model.to_string(), body.clone()));
+            self.gemini_video_operation
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted gemini video operation response".to_string(),
+                })
+        }
+
+        async fn gemini_retrieve_video_operation(
+            &self,
+            operation_name: &str,
+        ) -> Result<GeminiVideoOperation, SdkworkError> {
+            *self.last_gemini_video_operation_name.lock().unwrap() = Some(operation_name.to_string());
+            self.gemini_video_operation
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted gemini video operation response".to_string(),
+                })
+        }
+
+        async fn nano_banana_create_image_generation(
+            &self,
+            body: &NanoBananaImageGenerationRequest,
+        ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
+            *self.last_nano_banana_create_request.lock().unwrap() = Some(body.clone());
+            self.nano_banana_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted nano-banana create response".to_string(),
+                })
+        }
+
+        async fn nano_banana_retrieve_image_generation(
+            &self,
+            _task_id: &str,
+        ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
+            self.nano_banana_retrieve_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted nano-banana retrieve response".to_string(),
+                })
+        }
+
+        async fn kling_create_video_generation(
+            &self,
+            body: &KlingVideoGenerationRequest,
+        ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+            *self.last_kling_video_create_request.lock().unwrap() = Some(body.clone());
+            self.kling_video_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted kling video create response".to_string(),
+                })
+        }
+
+        async fn kling_retrieve_video_generation(
+            &self,
+            _task_id: &str,
+        ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+            self.kling_video_retrieve_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted kling video retrieve response".to_string(),
+                })
+        }
+
+        async fn openai_create_video(
+            &self,
+            _body: &OpenAiVideoCreateRequest,
+        ) -> Result<OpenAiVideo, SdkworkError> {
+            self.openai_video_create
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted openai video create response".to_string(),
+                })
+        }
+
+        async fn openai_retrieve_video(&self, _video_id: &str) -> Result<OpenAiVideo, SdkworkError> {
+            self.openai_video_retrieve
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted openai video retrieve response".to_string(),
                 })
         }
     }
