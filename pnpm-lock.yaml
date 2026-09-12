@@ -1004,69 +1004,6 @@ importers:
 
   apps/sdkwork-generations-pc/packages/sdkwork-generations-pc-core: {}
 
-  apps/sdkwork-generations-pc/packages/sdkwork-generations-pc-playground:
-    dependencies:
-      '@sdkwork/assets-pc-assets':
-        specifier: workspace:*
-        version: link:../../../../../sdkwork-assets/apps/sdkwork-assets-pc/packages/sdkwork-assets-pc-assets
-      '@sdkwork/audio-pc-generation':
-        specifier: workspace:*
-        version: link:../../../../../sdkwork-audio/apps/sdkwork-audio-pc/packages/sdkwork-audio-pc-generation
-      '@sdkwork/generations-pc-workspace':
-        specifier: workspace:*
-        version: link:../sdkwork-generations-pc-workspace
-      '@sdkwork/image-pc-generation':
-        specifier: workspace:*
-        version: link:../../../../../sdkwork-image/apps/sdkwork-image-pc/packages/sdkwork-image-pc-generation
-      '@sdkwork/models-pc-picker':
-        specifier: workspace:*
-        version: link:../../../../../sdkwork-models/apps/sdkwork-models-pc/packages/sdkwork-models-pc-picker
-      '@sdkwork/music-pc-generation':
-        specifier: workspace:*
-        version: link:../../../../../sdkwork-music/apps/sdkwork-music-pc/packages/sdkwork-music-pc-generation
-      '@sdkwork/video-pc-generation':
-        specifier: workspace:*
-        version: link:../../../../../sdkwork-video/apps/sdkwork-video-pc/packages/sdkwork-video-pc-generation
-      hast-util-sanitize:
-        specifier: ^5.0.2
-        version: 5.0.2
-      lucide-react:
-        specifier: 'catalog:'
-        version: 1.7.0(react@19.2.4)
-      react:
-        specifier: 'catalog:'
-        version: 19.2.4
-      react-dom:
-        specifier: '>=18.2.0 <20.0.0'
-        version: 19.2.4(react@19.2.4)
-      react-i18next:
-        specifier: 'catalog:'
-        version: 17.0.10(i18next@26.3.6(typescript@6.0.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@6.0.3)
-      react-markdown:
-        specifier: 10.1.0
-        version: 10.1.0(@types/react@19.2.14)(react@19.2.4)
-      react-router-dom:
-        specifier: 'catalog:'
-        version: 7.18.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      rehype-sanitize:
-        specifier: 6.0.0
-        version: 6.0.0
-      remark-gfm:
-        specifier: 4.0.1
-        version: 4.0.1
-      style-to-js:
-        specifier: ^1.1.21
-        version: 1.1.21
-    devDependencies:
-      '@types/react':
-        specifier: 'catalog:'
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: 'catalog:'
-        version: 19.2.3(@types/react@19.2.14)
-      typescript:
-        specifier: 'catalog:'
-        version: 6.0.3
 
   apps/sdkwork-generations-pc/packages/sdkwork-generations-pc-studio:
     dependencies:
