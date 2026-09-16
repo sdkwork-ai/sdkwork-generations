@@ -1,16 +1,18 @@
 //! Video generation vendor adapters.
 //!
 //! Supported vendor surfaces: OpenAI video (create/extend), Kling video
-//! generation, Vidu text/image/start-end to video, Volcengine content
-//! generation tasks, and Google Veo (`generateVideos` long-running
-//! operations).
+//! generation plus Kling avatar (digital human) and motion control (motion
+//! mimicry), Vidu text/image/start-end to video plus the Vidu motion-sync
+//! template, Volcengine content generation tasks, and Google Veo
+//! (`generateVideos` long-running operations).
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
-    KlingVideoGenerationRequest, OpenAiVideoCreateRequest, OpenAiVideoExtendRequest,
-    ProviderGeneratedMedia, ViduImageToVideoRequest, ViduStartEndToVideoRequest,
+    KlingAvatarCreateRequest, KlingMotionControlRequest, KlingVideoGenerationRequest,
+    OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia,
+    ViduImageToVideoRequest, ViduStartEndToVideoRequest, ViduTemplateRequest,
     ViduTextToVideoRequest, VolcengineContentGenerationTaskCreateRequest, VolcengineContentPart,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
@@ -51,7 +53,13 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
     }
 
     fn operation_types(&self) -> Vec<&str> {
-        vec!["text_to_video", "image_to_video", "video_extend"]
+        vec![
+            "text_to_video",
+            "image_to_video",
+            "video_extend",
+            "avatar_video",
+            "motion_mimicry",
+        ]
     }
 
     fn vendor(&self) -> &str {
@@ -65,16 +73,47 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
         _context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
         let selection = resolve_vendor(command, &self.default_vendor);
-        let inputs = GenerationCommandInputs::from_command(command);
+        let inputs = GenerationCommandInputs::from_command(command, &selection);
         // The refresh path routes polling by record.source_provider; persist
         // the resolved vendor so the same surface that dispatched the task
         // also polls it, even when it differs from the adapter default.
         let record = with_resolved_vendor(record, &selection.vendor);
+        // Operation support is vendor-scoped: without this guard a vendor
+        // whose surface ignores the operation type would silently degrade an
+        // avatar or motion-mimicry command into plain text-to-video.
+        match record.operation_type.as_str() {
+            "avatar_video" if selection.vendor != "kling" => {
+                return Err(GenerationsError::InvalidInput(format!(
+                    "avatar_video is not supported by vendor {:?}; supported vendors: kling",
+                    selection.vendor
+                )));
+            }
+            "motion_mimicry" if selection.vendor != "kling" && selection.vendor != "vidu" => {
+                return Err(GenerationsError::InvalidInput(format!(
+                    "motion_mimicry is not supported by vendor {:?}; supported vendors: kling, vidu",
+                    selection.vendor
+                )));
+            }
+            _ => {}
+        }
         match selection.vendor.as_str() {
             "openai" => dispatch_openai(self, &record, &inputs).await,
             "nano-banana" | "veo" => dispatch_gemini(self, &record, &inputs).await,
-            "kling" => dispatch_kling(self, &record, &inputs).await,
-            "vidu" => dispatch_vidu(self, &record, &inputs).await,
+            "kling" => match record.operation_type.as_str() {
+                "avatar_video" => {
+                    dispatch_kling_avatar(self, &record, &selection, &inputs).await
+                }
+                "motion_mimicry" => {
+                    dispatch_kling_motion_control(self, &record, &selection, &inputs).await
+                }
+                _ => dispatch_kling(self, &record, &inputs).await,
+            },
+            "vidu" => match record.operation_type.as_str() {
+                "motion_mimicry" => {
+                    dispatch_vidu_motion_sync(self, &record, &selection, &inputs).await
+                }
+                _ => dispatch_vidu(self, &record, &inputs).await,
+            },
             "volcengine" | "jimeng" => dispatch_volcengine(self, &record, &inputs).await,
             other => Err(GenerationsError::Provider(format!(
                 "video vendor {other:?} is not supported by the generations provider adapter"
@@ -173,6 +212,16 @@ async fn dispatch_openai(
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
     if record.operation_type == "video_extend" {
+        // `OpenAiVideoExtendRequest.video` is the *source video* and `.image`
+        // is an optional companion frame. Assigning the reference image to both
+        // fields sent an image URL as the video to extend.
+        let Some(source_video) = inputs.first_reference_video() else {
+            return Err(GenerationsError::InvalidInput(
+                "video_extend requires a source video reference (parameters.referenceVideos, \
+                 videoUrls, or drivingVideos)"
+                    .to_string(),
+            ));
+        };
         let request = OpenAiVideoExtendRequest {
             image: inputs.first_reference_image(),
             metadata: None,
@@ -180,7 +229,7 @@ async fn dispatch_openai(
             prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
             seconds: inputs.duration_seconds.map(|value| value as i64),
             size: inputs.size.clone(),
-            video: inputs.first_reference_image(),
+            video: Some(source_video),
         };
         let video = adapter
             .gateway
@@ -341,6 +390,141 @@ async fn dispatch_kling(
     )
 }
 
+/// Kling avatar (digital human): character image + driving audio (URL or tts
+/// text) → talking video task.
+async fn dispatch_kling_avatar(
+    adapter: &VideoGenerationProviderAdapter,
+    record: &GenerationRecord,
+    selection: &crate::vendor::VendorSelection,
+    inputs: &GenerationCommandInputs,
+) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    let Some(human_image) = inputs.first_reference_image() else {
+        return Err(GenerationsError::InvalidInput(
+            "kling avatar_video requires a character reference image".to_string(),
+        ));
+    };
+    let audio_url = inputs.audio_url.clone();
+    let audio_text = inputs
+        .audio_text
+        .clone()
+        .or_else(|| (!inputs.prompt.is_empty()).then(|| inputs.prompt.clone()));
+    if audio_url.is_none() && audio_text.is_none() {
+        return Err(GenerationsError::InvalidInput(
+            "kling avatar_video requires an audioUrl or driving text".to_string(),
+        ));
+    }
+    let voice_mode = if audio_url.is_some() { "audio" } else { "tts" }.to_string();
+    let request = KlingAvatarCreateRequest {
+        audio_url,
+        callback_url: None,
+        human_image,
+        model_name: (!selection.model.is_empty()).then(|| selection.model.clone()),
+        prompt: (!inputs.prompt.is_empty()).then(|| inputs.prompt.clone()),
+        text: if voice_mode == "tts" { audio_text } else { None },
+        voice_id: inputs.voice_id.clone().or_else(|| inputs.voice.clone()),
+        voice_language: inputs.language.clone(),
+        voice_mode: Some(voice_mode),
+    };
+    let task = adapter
+        .gateway
+        .kling_create_avatar(&request)
+        .await
+        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+    finish_media_task_dispatch(
+        record,
+        "kling",
+        inputs,
+        task.task_id.as_deref().or(task.id.as_deref()),
+        task.status.as_deref().or(task.state.as_deref()),
+        task.videos.clone().unwrap_or_default(),
+        task.error.as_ref().map(crate::task_error_message),
+    )
+}
+
+/// Kling motion control (motion mimicry): character image + performance
+/// reference video → video task.
+async fn dispatch_kling_motion_control(
+    adapter: &VideoGenerationProviderAdapter,
+    record: &GenerationRecord,
+    selection: &crate::vendor::VendorSelection,
+    inputs: &GenerationCommandInputs,
+) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    let Some(image) = inputs.first_reference_image() else {
+        return Err(GenerationsError::InvalidInput(
+            "kling motion_mimicry requires a character reference image".to_string(),
+        ));
+    };
+    let Some(video) = inputs.reference_videos.first().cloned() else {
+        return Err(GenerationsError::InvalidInput(
+            "kling motion_mimicry requires a motion reference video".to_string(),
+        ));
+    };
+    let request = KlingMotionControlRequest {
+        callback_url: None,
+        image,
+        model_name: (!selection.model.is_empty()).then(|| selection.model.clone()),
+        prompt: (!inputs.prompt.is_empty()).then(|| inputs.prompt.clone()),
+        video,
+    };
+    let task = adapter
+        .gateway
+        .kling_create_motion_control(&request)
+        .await
+        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+    finish_media_task_dispatch(
+        record,
+        "kling",
+        inputs,
+        task.task_id.as_deref().or(task.id.as_deref()),
+        task.status.as_deref().or(task.state.as_deref()),
+        task.videos.clone().unwrap_or_default(),
+        task.error.as_ref().map(crate::task_error_message),
+    )
+}
+
+/// Vidu motion-sync template (motion mimicry): character images + motion
+/// reference videos → video task.
+async fn dispatch_vidu_motion_sync(
+    adapter: &VideoGenerationProviderAdapter,
+    record: &GenerationRecord,
+    selection: &crate::vendor::VendorSelection,
+    inputs: &GenerationCommandInputs,
+) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    if inputs.reference_images.is_empty() {
+        return Err(GenerationsError::InvalidInput(
+            "vidu motion_mimicry requires a character reference image".to_string(),
+        ));
+    }
+    if inputs.reference_videos.is_empty() {
+        return Err(GenerationsError::InvalidInput(
+            "vidu motion_mimicry requires a motion reference video".to_string(),
+        ));
+    }
+    let template = if selection.model.trim().is_empty() {
+        "motion_control_2".to_string()
+    } else {
+        selection.model.clone()
+    };
+    let request = ViduTemplateRequest {
+        callback_url: None,
+        images: inputs.reference_images.clone(),
+        payload: None,
+        template,
+        video_urls: inputs.reference_videos.clone(),
+    };
+    let task = adapter
+        .gateway
+        .vidu_create_template(&request)
+        .await
+        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+    let Some(task_id) = task.task_id.as_deref().filter(|value| !value.trim().is_empty()) else {
+        return Err(GenerationsError::Provider(
+            "vidu task response is missing task_id".to_string(),
+        ));
+    };
+    Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)]))
+}
+
 async fn dispatch_vidu(
     adapter: &VideoGenerationProviderAdapter,
     record: &GenerationRecord,
@@ -396,18 +580,35 @@ async fn dispatch_vidu(
                     "vidu does not support operation {other:?}"
                 )));
             }
-            if inputs.reference_images.len() < 2 {
+            // Vidu's start-end surface carries both frames in one list:
+            // `images` is documented as "Start and end image URLs". The
+            // previous implementation popped the last entry and discarded it,
+            // so the request only ever carried the start frame and the caller's
+            // end frame never reached Vidu.
+            let frames: Vec<String> = inputs
+                .reference_images
+                .iter()
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+                .collect();
+            let start = frames.first().cloned();
+            let end = inputs
+                .reference_image_tail
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| frames.get(1).cloned());
+            let (Some(start_frame), Some(end_frame)) = (start, end) else {
                 return Err(GenerationsError::InvalidInput(
-                    "vidu start-end video requires first and last frame references".to_string(),
+                    "vidu start-end video requires first and last frame references \
+                     (parameters.referenceImages with two entries, or imageTail/lastFrame)"
+                        .to_string(),
                 ));
-            }
-            let mut images = inputs.reference_images.clone();
-            let image_tail = images.pop();
+            };
             let request = ViduStartEndToVideoRequest {
                 aspect_ratio: inputs.aspect_ratio.clone(),
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
-                images,
+                images: vec![start_frame, end_frame],
                 model: model.clone(),
                 movement_amplitude: None,
                 payload: None,
@@ -415,7 +616,6 @@ async fn dispatch_vidu(
                 resolution: inputs.resolution.clone(),
                 seed: inputs.seed,
             };
-            let _ = image_tail;
             adapter
                 .gateway
                 .vidu_create_start_end_to_video(&request)
@@ -640,7 +840,7 @@ mod video_lifecycle_tests {
     use std::sync::Arc;
 
     use cloudrouter_open_sdk::models::{
-        KlingVideoGenerationTask, OpenAiVideo, ProviderGeneratedMedia,
+        KlingVideoGenerationTask, OpenAiVideo, ProviderGeneratedMedia, ViduVideoGenerationTask,
     };
     use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
     use sdkwork_intelligence_generations_service::domain::models::{
@@ -834,6 +1034,168 @@ mod video_lifecycle_tests {
             .expect("veo retrieve succeeds")
             .expect("veo retrieve produces an outcome");
         assert_eq!(outcome.record.status, GenerationStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn avatar_video_rejects_unsupported_vendor_instead_of_degrading() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let provider = VideoGenerationProviderAdapter::new(gateway, "openai");
+        let command = command("openai/sora-2");
+        let error = provider
+            .dispatch(&sample_record("avatar_video"), &command, &context())
+            .await
+            .expect_err("avatar_video on openai must be rejected");
+        assert!(error.to_string().contains("avatar_video is not supported"));
+    }
+
+    #[tokio::test]
+    async fn motion_mimicry_rejects_unsupported_vendor_instead_of_degrading() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let provider = VideoGenerationProviderAdapter::new(gateway, "openai");
+        let command = command("volcengine/doubao-seedance-1-0");
+        let error = provider
+            .dispatch(&sample_record("motion_mimicry"), &command, &context())
+            .await
+            .expect_err("motion_mimicry on volcengine must be rejected");
+        assert!(error.to_string().contains("motion_mimicry is not supported"));
+    }
+
+    #[tokio::test]
+    async fn kling_avatar_video_pends_and_maps_tts_voice_mode() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.kling_avatar_create_task.lock().unwrap() = Some(KlingVideoGenerationTask {
+            task_id: Some("kling-avatar-1".to_string()),
+            state: Some("submitted".to_string()),
+            ..Default::default()
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("kling/kling-ai-avatar-v2");
+        command.parameters = Some(serde_json::json!({
+            "referenceImages": [{ "url": "https://cdn.example/presenter.jpg" }],
+            "audioText": "大家好,欢迎收看本期节目",
+            "voiceId": "zh-female-1"
+        }));
+        let outcome = provider
+            .dispatch(&sample_record("avatar_video"), &command, &context())
+            .await
+            .expect("kling avatar dispatch pends");
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(outcome.record.source_provider.as_deref(), Some("kling"));
+        assert_eq!(
+            outcome.record.source_job_id.as_deref(),
+            Some("kling-avatar-1")
+        );
+        let request = gateway
+            .last_kling_avatar_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("kling avatar request captured");
+        assert_eq!(request.human_image, "https://cdn.example/presenter.jpg");
+        assert_eq!(request.voice_mode.as_deref(), Some("tts"));
+        assert_eq!(
+            request.text.as_deref(),
+            Some("大家好,欢迎收看本期节目")
+        );
+        assert_eq!(request.audio_url, None);
+        assert_eq!(request.voice_id.as_deref(), Some("zh-female-1"));
+    }
+
+    #[tokio::test]
+    async fn kling_avatar_video_requires_audio_or_text() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let provider = VideoGenerationProviderAdapter::new(gateway, "openai");
+        let mut command = command("kling/kling-ai-avatar-v2");
+        command.prompt = String::new();
+        command.parameters = Some(serde_json::json!({
+            "referenceImages": [{ "url": "https://cdn.example/presenter.jpg" }]
+        }));
+        let error = provider
+            .dispatch(&sample_record("avatar_video"), &command, &context())
+            .await
+            .expect_err("avatar without audio must be rejected");
+        assert!(error.to_string().contains("audioUrl"), "actual: {error}");
+    }
+
+    #[tokio::test]
+    async fn kling_motion_control_maps_image_and_reference_video() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.kling_motion_control_create_task.lock().unwrap() = Some(KlingVideoGenerationTask {
+            task_id: Some("kling-motion-1".to_string()),
+            state: Some("submitted".to_string()),
+            ..Default::default()
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("kling/kling-v3");
+        command.parameters = Some(serde_json::json!({
+            "referenceImages": [{ "url": "https://cdn.example/character.jpg" }],
+            "referenceVideos": [{ "url": "https://cdn.example/performance.mp4" }]
+        }));
+        let outcome = provider
+            .dispatch(&sample_record("motion_mimicry"), &command, &context())
+            .await
+            .expect("kling motion control dispatch pends");
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(outcome.record.source_job_id.as_deref(), Some("kling-motion-1"));
+        let request = gateway
+            .last_kling_motion_control_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("kling motion control request captured");
+        assert_eq!(request.image, "https://cdn.example/character.jpg");
+        assert_eq!(request.video, "https://cdn.example/performance.mp4");
+        assert_eq!(request.model_name.as_deref(), Some("kling-v3"));
+    }
+
+    #[tokio::test]
+    async fn vidu_motion_sync_maps_template_images_and_videos() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.vidu_template_create_task.lock().unwrap() = Some(ViduVideoGenerationTask {
+            task_id: Some("vidu-motion-1".to_string()),
+            state: Some("created".to_string()),
+            ..Default::default()
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("vidu/motion_control_2.5");
+        command.parameters = Some(serde_json::json!({
+            "referenceImages": [{ "url": "https://cdn.example/person.png" }],
+            "referenceVideos": [{ "url": "https://cdn.example/dance.mp4" }]
+        }));
+        let outcome = provider
+            .dispatch(&sample_record("motion_mimicry"), &command, &context())
+            .await
+            .expect("vidu motion sync dispatch pends");
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(outcome.record.source_provider.as_deref(), Some("vidu"));
+        assert_eq!(outcome.record.source_job_id.as_deref(), Some("vidu-motion-1"));
+        let request = gateway
+            .last_vidu_template_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("vidu template request captured");
+        assert_eq!(request.template, "motion_control_2.5");
+        assert_eq!(request.images, vec!["https://cdn.example/person.png"]);
+        assert_eq!(request.video_urls, vec!["https://cdn.example/dance.mp4"]);
+    }
+
+    #[tokio::test]
+    async fn motion_mimicry_requires_reference_video() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let provider = VideoGenerationProviderAdapter::new(gateway, "openai");
+        let mut command = command("vidu/motion_control_2");
+        command.parameters = Some(serde_json::json!({
+            "referenceImages": [{ "url": "https://cdn.example/person.png" }]
+        }));
+        let error = provider
+            .dispatch(&sample_record("motion_mimicry"), &command, &context())
+            .await
+            .expect_err("motion mimicry without a driving video must be rejected");
+        assert!(error.to_string().contains("motion reference video"));
     }
 
     #[tokio::test]

@@ -67,7 +67,7 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
         _context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
         let selection = resolve_vendor(command, &self.default_vendor);
-        let inputs = GenerationCommandInputs::from_command(command);
+        let inputs = GenerationCommandInputs::from_command(command, &selection);
         // The refresh path routes polling by record.source_provider; persist
         // the resolved vendor so the same surface that dispatched the task
         // also polls it, even when it differs from the adapter default.

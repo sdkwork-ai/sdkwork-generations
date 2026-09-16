@@ -18,6 +18,7 @@ pub const VENDOR_JIMENG: &str = "jimeng";
 pub const VENDOR_VIDU: &str = "vidu";
 pub const VENDOR_MIDJOURNEY: &str = "midjourney";
 pub const VENDOR_SUNO: &str = "suno";
+pub const VENDOR_ELEVENLABS: &str = "elevenlabs";
 
 /// Resolved vendor selection for a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,7 @@ pub fn normalize_vendor(value: &str) -> String {
             VENDOR_VOLCENGINE.to_string()
         }
         "jimeng" => VENDOR_JIMENG.to_string(),
+        "eleven-labs" | "11labs" => VENDOR_ELEVENLABS.to_string(),
         _ => normalized,
     }
 }
@@ -95,7 +97,18 @@ pub struct GenerationCommandInputs {
     pub seed: Option<i64>,
     pub negative_prompt: Option<String>,
     pub voice: Option<String>,
+    pub voice_id: Option<String>,
     pub speed: Option<f64>,
+    pub stability: Option<f64>,
+    pub similarity: Option<f64>,
+    pub style: Option<f64>,
+    pub language: Option<String>,
+    pub emotion: Option<String>,
+    pub is_instrumental: Option<bool>,
+    pub lyrics_optimizer: Option<bool>,
+    pub sample_rate: Option<i64>,
+    pub audio_bitrate: Option<i64>,
+    pub audio_format: Option<String>,
     pub tags: Option<String>,
     pub title: Option<String>,
     pub lyrics: Option<String>,
@@ -105,12 +118,28 @@ pub struct GenerationCommandInputs {
     pub loop_enabled: Option<bool>,
     pub reference_images: Vec<String>,
     pub reference_image_tail: Option<String>,
+    pub reference_videos: Vec<String>,
+    pub audio_url: Option<String>,
+    pub audio_text: Option<String>,
     pub input_asset_ids: Vec<String>,
 }
 
 impl GenerationCommandInputs {
     /// Extract command inputs from a creation request.
-    pub fn from_command(command: &CreateGenerationCommandRequest) -> Self {
+    ///
+    /// `selection` is required rather than optional: the wire model is the
+    /// *vendor-stripped* model id, which only [`resolve_vendor`] knows (it
+    /// removes a leading `vendor/` prefix resolved from `parameters.vendor` or
+    /// the model prefix). Deriving it here would leak the prefix upstream, and
+    /// defaulting it to empty would make every adapter's `model_or_default`
+    /// fallback silently replace the caller's model with a hardcoded default —
+    /// and make `(!inputs.model.is_empty()).then(...)` drop the field from the
+    /// request body entirely. Taking the selection as a parameter makes that
+    /// mistake impossible to reintroduce at a new call site.
+    pub fn from_command(
+        command: &CreateGenerationCommandRequest,
+        selection: &VendorSelection,
+    ) -> Self {
         let parameters = command.parameters.clone().unwrap_or(Value::Null);
         let parameters = parameters.as_object();
         let generation_config = parameters
@@ -146,6 +175,19 @@ impl GenerationCommandInputs {
                     if let Some(value) = source.get(*key) {
                         if let Some(number) = value.as_f64() {
                             return Some(number);
+                        }
+                    }
+                }
+            }
+            None
+        };
+        let bool_from = |keys: &[&str]| -> Option<bool> {
+            for source in [parameters, generation_config] {
+                let Some(source) = source else { continue };
+                for key in keys {
+                    if let Some(value) = source.get(*key) {
+                        if let Some(flag) = value.as_bool() {
+                            return Some(flag);
                         }
                     }
                 }
@@ -197,9 +239,40 @@ impl GenerationCommandInputs {
             })
             .unwrap_or_default();
 
+        let reference_videos = parameters
+            .and_then(|params| {
+                params
+                    .get("referenceVideos")
+                    .or_else(|| params.get("reference_videos"))
+                    .or_else(|| params.get("videoUrls"))
+                    .or_else(|| params.get("video_urls"))
+                    .or_else(|| params.get("drivingVideos"))
+                    .or_else(|| params.get("driving_videos"))
+            })
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .map(|url| vec![url.to_string()])
+                    .or_else(|| {
+                        value.as_array().map(|entries| {
+                            entries
+                                .iter()
+                                .filter_map(|entry| {
+                                    entry
+                                        .get("url")
+                                        .or_else(|| entry.get("videoUrl"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_string)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+            })
+            .unwrap_or_default();
+
         Self {
             prompt: command.prompt.clone(),
-            model: String::new(),
+            model: selection.model.clone(),
             image_count: number_from(&["imageCount", "image_count", "n"]).map(|value| value as i64),
             size: string_from(&["size", "imageSize"]),
             quality: string_from(&["quality"]),
@@ -210,7 +283,19 @@ impl GenerationCommandInputs {
             seed: number_from(&["seed"]).map(|value| value as i64),
             negative_prompt: string_from(&["negativePrompt", "negative_prompt"]),
             voice: string_from(&["voice"]),
+            voice_id: string_from(&["voiceId", "voice_id"]),
             speed: number_from(&["speed"]),
+            stability: number_from(&["stability"]),
+            similarity: number_from(&["similarity", "similarityBoost", "similarity_boost"]),
+            style: number_from(&["style", "styleExaggeration"]),
+            language: string_from(&["language", "languageCode", "language_code"]),
+            emotion: string_from(&["emotion"]),
+            is_instrumental: bool_from(&["isInstrumental", "is_instrumental", "instrumental"]),
+            lyrics_optimizer: bool_from(&["lyricsOptimizer", "lyrics_optimizer"]),
+            sample_rate: number_from(&["sampleRate", "sample_rate"]).map(|value| value as i64),
+            audio_bitrate: number_from(&["bitrate", "audioBitrate", "audio_bitrate"])
+                .map(|value| value as i64),
+            audio_format: string_from(&["audioFormat", "audio_format", "format"]),
             tags: string_from(&["tags", "styleTags", "style_tags"]),
             title: string_from(&["title"]),
             lyrics: string_from(&["lyrics"]),
@@ -227,6 +312,9 @@ impl GenerationCommandInputs {
                 .and_then(serde_json::Value::as_bool),
             reference_images,
             reference_image_tail: string_from(&["imageTail", "image_tail", "lastFrame"]),
+            reference_videos,
+            audio_url: string_from(&["audioUrl", "audio_url", "audio"]),
+            audio_text: string_from(&["audioText", "audio_text"]),
             input_asset_ids: command.input_asset_ids.clone().unwrap_or_default(),
         }
         .with_reference_assets(reference_assets)
@@ -240,6 +328,18 @@ impl GenerationCommandInputs {
     /// First reference image, if any.
     pub fn first_reference_image(&self) -> Option<String> {
         self.reference_images
+            .iter()
+            .find(|value| !value.trim().is_empty())
+            .cloned()
+    }
+
+    /// First non-blank source video reference (`parameters.referenceVideos`,
+    /// `videoUrls`, or `drivingVideos`).
+    ///
+    /// Video-extension and motion-transfer surfaces must send the *video* the
+    /// caller supplied, never a reference image standing in for it.
+    pub fn first_reference_video(&self) -> Option<String> {
+        self.reference_videos
             .iter()
             .find(|value| !value.trim().is_empty())
             .cloned()
@@ -291,12 +391,38 @@ mod tests {
         }));
         command.input_asset_ids = Some(vec!["drive://space/asset-1".to_string()]);
 
-        let inputs = GenerationCommandInputs::from_command(&command);
+        let selection = resolve_vendor(&command, VENDOR_OPENAI);
+        let inputs = GenerationCommandInputs::from_command(&command, &selection);
         assert_eq!(inputs.image_count, Some(2));
         assert_eq!(inputs.aspect_ratio.as_deref(), Some("1:1"));
         assert_eq!(inputs.quality.as_deref(), Some("high"));
         assert_eq!(inputs.reference_images, vec!["https://cdn.example/ref.png"]);
         assert_eq!(inputs.input_asset_ids, vec!["drive://space/asset-1"]);
+    }
+
+    /// The caller-selected model must reach the adapters, and it must be the
+    /// vendor-stripped id: a `vendor/` prefix left on it would be sent upstream
+    /// as part of the model name. Previously `from_command` hardcoded
+    /// `model: String::new()`, so `model_or_default` always substituted the
+    /// adapter default and `(!inputs.model.is_empty()).then(...)` dropped the
+    /// field from the request body.
+    #[test]
+    fn command_inputs_carry_the_vendor_stripped_model() {
+        let command = command_with_model("kling/kling-v2-master");
+        let selection = resolve_vendor(&command, VENDOR_OPENAI);
+        assert_eq!(selection.vendor, "kling");
+
+        let inputs = GenerationCommandInputs::from_command(&command, &selection);
+        assert_eq!(inputs.model, "kling-v2-master");
+    }
+
+    #[test]
+    fn command_inputs_carry_the_bare_model_when_no_vendor_prefix_is_given() {
+        let command = command_with_model("gpt-image-2");
+        let selection = resolve_vendor(&command, VENDOR_OPENAI);
+
+        let inputs = GenerationCommandInputs::from_command(&command, &selection);
+        assert_eq!(inputs.model, "gpt-image-2");
     }
 
     fn command_with_model(model: &str) -> CreateGenerationCommandRequest {
