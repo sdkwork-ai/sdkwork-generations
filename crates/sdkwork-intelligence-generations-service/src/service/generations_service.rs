@@ -246,6 +246,38 @@ impl GenerationsService {
         .await
     }
 
+    /// Convenience entry for avatar (digital human) video.
+    pub async fn create_avatar_video(
+        state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
+        command: &CreateGenerationCommandRequest,
+    ) -> Result<GenerationCommandResponse, GenerationsError> {
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Video,
+            "avatar_video",
+            command,
+        )
+        .await
+    }
+
+    /// Convenience entry for motion mimicry video.
+    pub async fn create_motion_mimicry(
+        state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
+        command: &CreateGenerationCommandRequest,
+    ) -> Result<GenerationCommandResponse, GenerationsError> {
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Video,
+            "motion_mimicry",
+            command,
+        )
+        .await
+    }
+
     /// Convenience entry for text-to-music.
     pub async fn create_text_to_music(
         state: &GenerationsServiceState,
@@ -329,7 +361,9 @@ impl GenerationsService {
     /// Get a generation record by id.
     ///
     /// Non-terminal records are refreshed against the dispatching provider
-    /// first so async tasks surface their latest status and results.
+    /// first so async tasks surface their latest status and results. A refresh
+    /// that yields nothing leaves the stored record in place; `NotFound` is
+    /// reserved for ids the repository does not know.
     pub async fn get_generation(
         state: &GenerationsServiceState,
         context: &GenerationsRequestContext,
@@ -340,9 +374,8 @@ impl GenerationsService {
             .get(id)
             .await?
             .ok_or_else(|| GenerationsError::NotFound(id.to_string()))?;
-        refresh_pending_generation(state, context, record)
-            .await
-            .ok_or_else(|| GenerationsError::NotFound(id.to_string()))
+        let refreshed = refresh_pending_generation(state, context, record.clone()).await;
+        Ok(refreshed.unwrap_or(record))
     }
 
     /// List generation records with cursor pagination.
@@ -370,9 +403,8 @@ impl GenerationsService {
         params: ListResultsParams,
     ) -> Result<(Vec<GenerationResult>, PageInfo), GenerationsError> {
         if let Some(record) = state.repository.get(generation_id).await? {
-            if let Some(refreshed) = refresh_pending_generation(state, context, record).await {
-                let _ = refreshed;
-            }
+            // Best effort: the stored results are returned either way.
+            let _ = refresh_pending_generation(state, context, record).await;
         }
         let params = ListResultsParams {
             generation_id: generation_id.to_string(),
@@ -549,16 +581,45 @@ fn resolve_provider<'a>(
     )))
 }
 
-/// Resolve a provider by the vendor recorded on the generation (refresh path).
-fn resolve_provider_by_vendor<'a>(
+/// Resolve the provider that can poll `record` (refresh path).
+///
+/// The two sides of the comparison are not the same kind of value. The
+/// registry holds one aggregate adapter per modality and its `vendor()`
+/// reports only that modality's *default* vendor (`ModalityDefaultVendors`),
+/// while `record.source_provider` holds the vendor that actually served the
+/// task, which the adapter writes back after dispatch (see
+/// `with_resolved_vendor`). A vendor-keyed lookup therefore misses for every
+/// non-default vendor — `nano-banana` images, `kling` video, `elevenlabs`
+/// speech, `minimax` music — and polling stops without reporting anything.
+///
+/// Prefer an exact `(modality, vendor)` match so a registry that ever carries
+/// several providers for one modality still routes to the right one, then
+/// fall back to the modality's provider the way `resolve_provider` does: that
+/// aggregate adapter owns the vendor dispatch internally and reads the vendor
+/// back off the record.
+fn resolve_polling_provider<'a>(
     state: &'a GenerationsServiceState,
-    modality: &GenerationModality,
-    vendor: &str,
+    record: &GenerationRecord,
 ) -> Option<&'a dyn GenerationProvider> {
-    state.providers().iter().find_map(|provider| {
-        (provider.modality() == *modality && provider.vendor() == vendor)
-            .then(|| provider.as_ref())
-    })
+    let registered: Vec<&'a dyn GenerationProvider> = state
+        .providers()
+        .iter()
+        .filter(|provider| provider.modality() == record.modality)
+        .map(|provider| &**provider)
+        .collect();
+    if let Some(vendor) = record.source_provider.as_deref() {
+        if let Some(exact) = registered
+            .iter()
+            .copied()
+            .find(|provider| provider.vendor() == vendor)
+        {
+            return Some(exact);
+        }
+    }
+    match registered.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
 }
 
 /// Persist a provider outcome: results, timeline events, record state, usage.
@@ -632,8 +693,14 @@ async fn record_usage(state: &GenerationsServiceState, fact: GenerationUsageFact
 
 /// Refresh a non-terminal generation against its dispatching provider.
 ///
-/// Returns the refreshed record, or the original record when no refresh
-/// applies (terminal status, unknown vendor, or sync provider).
+/// Returns the refreshed record, or the stored record unchanged when there is
+/// nothing to apply: a terminal status, no provider able to poll the modality,
+/// a vendor that reports no update yet, or a failed persist.
+///
+/// `None` means "no such generation" to the callers — `get_generation` turns
+/// it into a 404 — so "nothing to do yet" must hand the stored record back.
+/// Returning `None` for an empty or failed poll reported a live, successfully
+/// created task as missing on the next read.
 pub async fn refresh_pending_generation(
     state: &GenerationsServiceState,
     context: &GenerationsRequestContext,
@@ -645,16 +712,31 @@ pub async fn refresh_pending_generation(
     ) {
         return Some(record);
     }
-    let vendor = record.source_provider.clone()?;
-    let provider = resolve_provider_by_vendor(state, &record.modality, &vendor)?;
-    let outcome = provider
-        .retrieve(&record, context)
-        .await
-        .ok()
-        .flatten()?;
-    persist_outcome(state, outcome, GenerationUsageSource::Retrieve)
-        .await
-        .ok()
+    let Some(provider) = resolve_polling_provider(state, &record) else {
+        tracing::debug!(
+            generation_id = %record.id,
+            modality = %record.modality,
+            vendor = record.source_provider.as_deref().unwrap_or("<unset>"),
+            "no provider can poll this generation; keeping the stored record"
+        );
+        return Some(record);
+    };
+    let Some(outcome) = provider.retrieve(&record, context).await.ok().flatten() else {
+        // The vendor has no update yet, or the poll itself failed. Keep the
+        // stored record; the next read polls again.
+        return Some(record);
+    };
+    match persist_outcome(state, outcome, GenerationUsageSource::Retrieve).await {
+        Ok(refreshed) => Some(refreshed),
+        Err(error) => {
+            tracing::warn!(
+                generation_id = %record.id,
+                error = %error,
+                "persisting the refreshed generation failed; keeping the stored record"
+            );
+            Some(record)
+        }
+    }
 }
 
 /// Truncate a prompt to the persisted preview length.

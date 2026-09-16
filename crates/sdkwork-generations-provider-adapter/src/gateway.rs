@@ -11,16 +11,18 @@ use async_trait::async_trait;
 use cloudrouter_open_sdk::api::paths::ai_path;
 use cloudrouter_open_sdk::models::{
     ElevenLabsSoundGenerationRequest, ElevenLabsSoundGenerationResponse,
-    ElevenLabsTextToSpeechRequest, ElevenLabsTextToSpeechResponse, KlingVideoGenerationRequest,
-    KlingVideoGenerationTask, NanoBananaImageGenerationRequest,
+    ElevenLabsTextToSpeechRequest, ElevenLabsTextToSpeechResponse, KlingAvatarCreateRequest,
+    KlingMotionControlRequest, KlingVideoGenerationRequest, KlingVideoGenerationTask,
+    MiniMaxMusicGenerationRequest, MiniMaxMusicGenerationResponse,
+    NanoBananaImageGenerationRequest,
     NanoBananaImageGenerationTask, OpenAiAudioTranscription, OpenAiAudioTranscriptionRequest,
     OpenAiAudioTranslation, OpenAiAudioTranslationRequest, OpenAiImageEditRequest,
     OpenAiImageGenerationRequest, OpenAiImageList, OpenAiSpeechCreateRequest, OpenAiVideo,
     OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia, ProviderTaskError,
     SunoMusicGenerationRequest, SunoMusicGenerationResponse, SunoMusicGenerationTaskResponse,
     ViduImageGenerationTask, ViduImageToVideoRequest, ViduReferenceToImageRequest,
-    ViduStartEndToVideoRequest, ViduTaskCreationsResponse, ViduTextToVideoRequest,
-    ViduVideoGenerationTask, VolcengineContentGenerationTask,
+    ViduStartEndToVideoRequest, ViduTaskCreationsResponse, ViduTemplateRequest,
+    ViduTextToVideoRequest, ViduVideoGenerationTask, VolcengineContentGenerationTask,
     VolcengineContentGenerationTaskCreateRequest, VolcengineContentGenerationTaskCreateResponse,
 };
 use cloudrouter_open_sdk::{SdkworkAiClient, SdkworkError};
@@ -173,6 +175,28 @@ pub trait MediaSdkGateway: Send + Sync {
         })
     }
 
+    async fn volcengine_create_speech(
+        &self,
+        body: &OpenAiSpeechCreateRequest,
+    ) -> Result<Vec<u8>, SdkworkError> {
+        let _ = body;
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn minimax_create_music_generation(
+        &self,
+        body: &MiniMaxMusicGenerationRequest,
+    ) -> Result<MiniMaxMusicGenerationResponse, SdkworkError> {
+        let _ = body;
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
     // -- Video --------------------------------------------------------------
 
     async fn openai_create_video(
@@ -216,6 +240,39 @@ pub trait MediaSdkGateway: Send + Sync {
         &self,
         task_id: &str,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn kling_create_avatar(
+        &self,
+        body: &KlingAvatarCreateRequest,
+    ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+        let _ = body;
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn kling_create_motion_control(
+        &self,
+        body: &KlingMotionControlRequest,
+    ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+        let _ = body;
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn vidu_create_template(
+        &self,
+        body: &ViduTemplateRequest,
+    ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+        let _ = body;
         Err(SdkworkError::HttpStatus {
             status: 599,
             body: "gateway method not wired in this test double".to_string(),
@@ -503,6 +560,26 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
             .await
     }
 
+    async fn volcengine_create_speech(
+        &self,
+        body: &OpenAiSpeechCreateRequest,
+    ) -> Result<Vec<u8>, SdkworkError> {
+        self.client
+            .audio_volcengine()
+            .create_api_v3_audio_speech(body)
+            .await
+    }
+
+    async fn minimax_create_music_generation(
+        &self,
+        body: &MiniMaxMusicGenerationRequest,
+    ) -> Result<MiniMaxMusicGenerationResponse, SdkworkError> {
+        self.client
+            .audio_minimax()
+            .create_v1_music_generation(body)
+            .await
+    }
+
     async fn openai_create_video(
         &self,
         body: &OpenAiVideoCreateRequest,
@@ -536,6 +613,30 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
             .videos_kling()
             .list_v1_videos_generations(task_id)
             .await
+    }
+
+    async fn kling_create_avatar(
+        &self,
+        body: &KlingAvatarCreateRequest,
+    ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+        self.client.videos_kling().create_v1_videos_avatar(body).await
+    }
+
+    async fn kling_create_motion_control(
+        &self,
+        body: &KlingMotionControlRequest,
+    ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+        self.client
+            .videos_kling()
+            .create_v1_videos_motion_control(body)
+            .await
+    }
+
+    async fn vidu_create_template(
+        &self,
+        body: &ViduTemplateRequest,
+    ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+        self.client.videos_vidu().create_ent_v2_template(body).await
     }
 
     async fn vidu_create_text_to_video(
@@ -892,6 +993,24 @@ pub mod test_support {
         pub openai_image_generation: Mutex<Option<OpenAiImageList>>,
         pub last_openai_image_request: Mutex<Option<OpenAiImageGenerationRequest>>,
         pub elevenlabs_sound_generation: Mutex<Option<ElevenLabsSoundGenerationResponse>>,
+        pub elevenlabs_text_to_speech: Mutex<Option<ElevenLabsTextToSpeechResponse>>,
+        pub last_elevenlabs_text_to_speech:
+            Mutex<Option<(String, ElevenLabsTextToSpeechRequest, Option<String>)>>,
+        pub volcengine_speech: Mutex<Option<Vec<u8>>>,
+        pub last_volcengine_speech_request: Mutex<Option<OpenAiSpeechCreateRequest>>,
+        pub openai_speech: Mutex<Option<Vec<u8>>>,
+        pub last_openai_speech_request: Mutex<Option<OpenAiSpeechCreateRequest>>,
+        pub minimax_music_generation: Mutex<Option<MiniMaxMusicGenerationResponse>>,
+        pub last_minimax_music_request: Mutex<Option<MiniMaxMusicGenerationRequest>>,
+        pub suno_create_task: Mutex<Option<SunoMusicGenerationResponse>>,
+        pub last_suno_create_request: Mutex<Option<SunoMusicGenerationRequest>>,
+        pub suno_retrieve_task: Mutex<Option<SunoMusicGenerationTaskResponse>>,
+        pub kling_avatar_create_task: Mutex<Option<KlingVideoGenerationTask>>,
+        pub last_kling_avatar_request: Mutex<Option<KlingAvatarCreateRequest>>,
+        pub kling_motion_control_create_task: Mutex<Option<KlingVideoGenerationTask>>,
+        pub last_kling_motion_control_request: Mutex<Option<KlingMotionControlRequest>>,
+        pub vidu_template_create_task: Mutex<Option<ViduVideoGenerationTask>>,
+        pub last_vidu_template_request: Mutex<Option<ViduTemplateRequest>>,
         pub gemini_video_operation: Mutex<Option<GeminiVideoOperation>>,
         pub last_gemini_video_request: Mutex<Option<(String, GeminiVideoGenerationRequest)>>,
         pub last_gemini_video_operation_name: Mutex<Option<String>>,
@@ -911,6 +1030,23 @@ pub mod test_support {
                 openai_image_generation: Mutex::new(None),
                 last_openai_image_request: Mutex::new(None),
                 elevenlabs_sound_generation: Mutex::new(None),
+                elevenlabs_text_to_speech: Mutex::new(None),
+                last_elevenlabs_text_to_speech: Mutex::new(None),
+                volcengine_speech: Mutex::new(None),
+                last_volcengine_speech_request: Mutex::new(None),
+                openai_speech: Mutex::new(None),
+                last_openai_speech_request: Mutex::new(None),
+                minimax_music_generation: Mutex::new(None),
+                last_minimax_music_request: Mutex::new(None),
+                suno_create_task: Mutex::new(None),
+                last_suno_create_request: Mutex::new(None),
+                suno_retrieve_task: Mutex::new(None),
+                kling_avatar_create_task: Mutex::new(None),
+                last_kling_avatar_request: Mutex::new(None),
+                kling_motion_control_create_task: Mutex::new(None),
+                last_kling_motion_control_request: Mutex::new(None),
+                vidu_template_create_task: Mutex::new(None),
+                last_vidu_template_request: Mutex::new(None),
                 gemini_video_operation: Mutex::new(None),
                 last_gemini_video_request: Mutex::new(None),
                 last_gemini_video_operation_name: Mutex::new(None),
@@ -955,6 +1091,146 @@ pub mod test_support {
                 .ok_or_else(|| SdkworkError::HttpStatus {
                     status: 599,
                     body: "no scripted elevenlabs sound generation response".to_string(),
+                })
+        }
+
+        async fn elevenlabs_create_text_to_speech(
+            &self,
+            voice_id: &str,
+            body: &ElevenLabsTextToSpeechRequest,
+            output_format: Option<&str>,
+        ) -> Result<ElevenLabsTextToSpeechResponse, SdkworkError> {
+            *self.last_elevenlabs_text_to_speech.lock().unwrap() = Some((
+                voice_id.to_string(),
+                body.clone(),
+                output_format.map(str::to_string),
+            ));
+            self.elevenlabs_text_to_speech
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted elevenlabs text to speech response".to_string(),
+                })
+        }
+
+        async fn volcengine_create_speech(
+            &self,
+            body: &OpenAiSpeechCreateRequest,
+        ) -> Result<Vec<u8>, SdkworkError> {
+            *self.last_volcengine_speech_request.lock().unwrap() = Some(body.clone());
+            self.volcengine_speech
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted volcengine speech response".to_string(),
+                })
+        }
+
+        async fn openai_create_speech(
+            &self,
+            body: &OpenAiSpeechCreateRequest,
+        ) -> Result<Vec<u8>, SdkworkError> {
+            *self.last_openai_speech_request.lock().unwrap() = Some(body.clone());
+            self.openai_speech
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted openai speech response".to_string(),
+                })
+        }
+
+        async fn minimax_create_music_generation(
+            &self,
+            body: &MiniMaxMusicGenerationRequest,
+        ) -> Result<MiniMaxMusicGenerationResponse, SdkworkError> {
+            *self.last_minimax_music_request.lock().unwrap() = Some(body.clone());
+            self.minimax_music_generation
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted minimax music generation response".to_string(),
+                })
+        }
+
+        async fn suno_create_music_generation(
+            &self,
+            body: &SunoMusicGenerationRequest,
+        ) -> Result<SunoMusicGenerationResponse, SdkworkError> {
+            *self.last_suno_create_request.lock().unwrap() = Some(body.clone());
+            self.suno_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted suno music generation response".to_string(),
+                })
+        }
+
+        async fn suno_retrieve_music_generation(
+            &self,
+            _task_id: &str,
+        ) -> Result<SunoMusicGenerationTaskResponse, SdkworkError> {
+            self.suno_retrieve_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted suno music task response".to_string(),
+                })
+        }
+
+        async fn kling_create_avatar(
+            &self,
+            body: &KlingAvatarCreateRequest,
+        ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+            *self.last_kling_avatar_request.lock().unwrap() = Some(body.clone());
+            self.kling_avatar_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted kling avatar task response".to_string(),
+                })
+        }
+
+        async fn kling_create_motion_control(
+            &self,
+            body: &KlingMotionControlRequest,
+        ) -> Result<KlingVideoGenerationTask, SdkworkError> {
+            *self.last_kling_motion_control_request.lock().unwrap() = Some(body.clone());
+            self.kling_motion_control_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted kling motion control task response".to_string(),
+                })
+        }
+
+        async fn vidu_create_template(
+            &self,
+            body: &ViduTemplateRequest,
+        ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+            *self.last_vidu_template_request.lock().unwrap() = Some(body.clone());
+            self.vidu_template_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu template task response".to_string(),
                 })
         }
 

@@ -531,10 +531,14 @@ async fn sync_image_dispatch_completes_without_refresh() {
 }
 
 #[tokio::test]
-async fn async_image_task_refresh_routes_by_persisted_vendor_and_reaches_terminal() {
-    // Dispatch happens on the default provider (openai), but the command
-    // resolved the google/nano-banana surface; the dispatch outcome persists
-    // the resolved vendor exactly like the real adapter does.
+async fn async_image_task_refresh_reaches_the_aggregate_adapter_that_dispatched() {
+    // The production registry holds one aggregate adapter per modality, and
+    // `vendor()` reports only the modality default (`ModalityDefaultVendors`).
+    // Here the command resolves the nano-banana surface, so the vendor
+    // persisted at dispatch ("nano-banana") deliberately differs from the
+    // adapter's own vendor ("openai"). The refresh must still reach that
+    // adapter: it owns the vendor dispatch internally and reads the vendor
+    // back off the record.
     let openai = ScriptedProvider::new(
         GenerationModality::Image,
         "openai",
@@ -542,17 +546,11 @@ async fn async_image_task_refresh_routes_by_persisted_vendor_and_reaches_termina
             vendor: "nano-banana",
             task_id: "nano-task-1",
         }],
-        vec![],
-    );
-    let google = ScriptedProvider::new(
-        GenerationModality::Image,
-        "nano-banana",
-        vec![],
         vec![RetrievalBehavior::CompleteWithImage {
             url: "https://cdn.example/nano-banana-image.png",
         }],
     );
-    let state = service_state(vec![Box::new(openai), Box::new(google.clone())]);
+    let state = service_state(vec![Box::new(openai.clone())]);
 
     let created = GenerationsService::create_generation(
         &state,
@@ -575,8 +573,12 @@ async fn async_image_task_refresh_routes_by_persisted_vendor_and_reaches_termina
         .await
         .expect("refresh reaches the vendor surface");
     assert_eq!(refreshed.status, GenerationStatus::Succeeded);
-    assert_eq!(google.retrieved_vendor_values(), vec![Some("nano-banana".to_string())],
-        "the refresh must poll the provider whose vendor matches the persisted record");
+    assert_eq!(
+        openai.retrieved_vendor_values(),
+        vec![Some("nano-banana".to_string())],
+        "the refresh must reach the adapter that dispatched even though the \
+         persisted vendor is not that adapter's own vendor()"
+    );
     let results = state
         .result_repository()
         .list(ListResultsParams {
@@ -599,7 +601,10 @@ async fn async_image_task_refresh_routes_by_persisted_vendor_and_reaches_termina
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn async_video_task_refresh_routes_to_kling_surface_and_collects_media() {
+async fn async_video_task_refresh_polls_the_dispatching_adapter_across_pending_reads() {
+    // Same aggregate-adapter shape as the image case: one video adapter whose
+    // own vendor is the modality default ("openai"), dispatching on the kling
+    // surface and persisting "kling".
     let openai = ScriptedProvider::new(
         GenerationModality::Video,
         "openai",
@@ -607,12 +612,6 @@ async fn async_video_task_refresh_routes_to_kling_surface_and_collects_media() {
             vendor: "kling",
             task_id: "kling-task-7",
         }],
-        vec![],
-    );
-    let kling = ScriptedProvider::new(
-        GenerationModality::Video,
-        "kling",
-        vec![],
         // pop() drains from the tail: the first refresh sees the task still
         // running, the second one collects the finished video.
         vec![
@@ -622,7 +621,7 @@ async fn async_video_task_refresh_routes_to_kling_surface_and_collects_media() {
             RetrievalBehavior::StillRunning,
         ],
     );
-    let state = service_state(vec![Box::new(openai), Box::new(kling.clone())]);
+    let state = service_state(vec![Box::new(openai.clone())]);
 
     let created = GenerationsService::create_generation(
         &state,
@@ -648,9 +647,9 @@ async fn async_video_task_refresh_routes_to_kling_surface_and_collects_media() {
         .expect("second refresh collects the finished task");
     assert_eq!(refreshed.status, GenerationStatus::Succeeded);
     assert_eq!(
-        kling.retrieved_vendor_values(),
+        openai.retrieved_vendor_values(),
         vec![Some("kling".to_string()), Some("kling".to_string())],
-        "every refresh must route to the kling surface by the persisted vendor"
+        "every refresh polls the dispatching adapter, carrying the persisted vendor"
     );
     let results = state
         .result_repository()
@@ -712,4 +711,106 @@ async fn failed_video_dispatch_persists_failed_record() {
         .0;
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, GenerationStatus::Failed);
+}
+
+// ---------------------------------------------------------------------------
+// Refresh provider resolution
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn async_refresh_prefers_the_provider_whose_own_vendor_matches() {
+    // A registry that does carry several providers for one modality keeps
+    // working: the exact (modality, vendor) match wins over the
+    // single-provider fallback, so the poll lands on the surface that owns
+    // the task rather than on whichever adapter happens to be first.
+    let default_adapter = ScriptedProvider::new(
+        GenerationModality::Image,
+        "openai",
+        vec![DispatchBehavior::PendOnTask {
+            vendor: "nano-banana",
+            task_id: "nano-task-2",
+        }],
+        vec![],
+    );
+    let nano_banana = ScriptedProvider::new(
+        GenerationModality::Image,
+        "nano-banana",
+        vec![],
+        vec![RetrievalBehavior::CompleteWithImage {
+            url: "https://cdn.example/nano-banana-image-2.png",
+        }],
+    );
+    let state = service_state(vec![
+        Box::new(default_adapter.clone()),
+        Box::new(nano_banana.clone()),
+    ]);
+
+    let created = GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &command("google/gemini-2.5-flash-image"),
+    )
+    .await
+    .expect("dispatch pends");
+    assert_eq!(
+        created.generation.source_provider.as_deref(),
+        Some("nano-banana")
+    );
+
+    let refreshed = GenerationsService::get_generation(&state, &context(), &created.generation.id)
+        .await
+        .expect("the exact vendor match polls the matching provider");
+    assert_eq!(refreshed.status, GenerationStatus::Succeeded);
+    assert_eq!(
+        nano_banana.retrieved_vendor_values(),
+        vec![Some("nano-banana".to_string())]
+    );
+    assert!(
+        default_adapter.retrieved_vendor_values().is_empty(),
+        "the fallback must not be consulted when an exact vendor match exists"
+    );
+}
+
+#[tokio::test]
+async fn a_poll_without_a_vendor_update_stays_readable() {
+    // A vendor with nothing to report yet returns no outcome. That is not a
+    // missing generation: treating it as one turned a live, successfully
+    // created task into a 404 on the very next read.
+    let adapter = ScriptedProvider::new(
+        GenerationModality::Video,
+        "openai",
+        vec![DispatchBehavior::PendOnTask {
+            vendor: "vidu",
+            task_id: "vidu-task-1",
+        }],
+        // No retrieval script, so the poll yields `Ok(None)`.
+        vec![],
+    );
+    let state = service_state(vec![Box::new(adapter)]);
+
+    let created = GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Video,
+        "text_to_video",
+        &command("vidu/vidu-q1"),
+    )
+    .await
+    .expect("dispatch pends");
+
+    let fetched = GenerationsService::get_generation(&state, &context(), &created.generation.id)
+        .await
+        .expect("a poll with no update must not report the record as missing");
+    assert_eq!(fetched.status, GenerationStatus::Running);
+    assert_eq!(fetched.source_provider.as_deref(), Some("vidu"));
+
+    assert!(
+        matches!(
+            GenerationsService::get_generation(&state, &context(), "does-not-exist").await,
+            Err(GenerationsError::NotFound(_))
+        ),
+        "an id the repository does not know is still a 404"
+    );
 }

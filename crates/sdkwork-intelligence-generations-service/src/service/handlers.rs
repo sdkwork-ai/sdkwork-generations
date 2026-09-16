@@ -48,6 +48,14 @@ pub fn build_app_routes() -> axum::Router<GenerationsServiceState> {
             "/app/v3/api/generations/videos/video_extend",
             axum::routing::post(create_video_extend),
         )
+        .route(
+            "/app/v3/api/generations/videos/avatar",
+            axum::routing::post(create_avatar_video),
+        )
+        .route(
+            "/app/v3/api/generations/videos/motion_mimicry",
+            axum::routing::post(create_motion_mimicry),
+        )
         // Music generations
         .route(
             "/app/v3/api/generations/music/text_to_music",
@@ -258,6 +266,32 @@ async fn create_video_extend(
 ) -> axum::Json<Value> {
     let context = context_from_extension(&extension);
     match GenerationsService::create_video_extend(&state, &context, &body).await {
+        Ok(resp) => success(serde_json::json!({ "item": resp.generation })),
+        Err(error) => failure(&error),
+    }
+}
+
+/// POST /app/v3/api/generations/videos/avatar
+async fn create_avatar_video(
+    State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
+    axum::Json(body): axum::Json<CreateGenerationCommandRequest>,
+) -> axum::Json<Value> {
+    let context = context_from_extension(&extension);
+    match GenerationsService::create_avatar_video(&state, &context, &body).await {
+        Ok(resp) => success(serde_json::json!({ "item": resp.generation })),
+        Err(error) => failure(&error),
+    }
+}
+
+/// POST /app/v3/api/generations/videos/motion_mimicry
+async fn create_motion_mimicry(
+    State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
+    axum::Json(body): axum::Json<CreateGenerationCommandRequest>,
+) -> axum::Json<Value> {
+    let context = context_from_extension(&extension);
+    match GenerationsService::create_motion_mimicry(&state, &context, &body).await {
         Ok(resp) => success(serde_json::json!({ "item": resp.generation })),
         Err(error) => failure(&error),
     }
