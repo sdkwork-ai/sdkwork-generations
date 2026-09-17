@@ -307,7 +307,7 @@ fn voice_settings(inputs: &GenerationCommandInputs) -> Option<serde_json::Value>
     if let Some(speed) = inputs.speed {
         settings.insert("speed".to_string(), serde_json::json!(speed));
     }
-    (!settings.is_empty()).then(|| serde_json::Value::Object(settings))
+    (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
 }
 
 fn speech_bytes(result: Result<Vec<u8>, cloudrouter_open_sdk::SdkworkError>) -> Result<Vec<u8>, GenerationsError> {
