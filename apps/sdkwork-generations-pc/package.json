@@ -23,6 +23,7 @@
   "dependencies": {
     "@sdkwork/drive-app-sdk": "workspace:*",
     "@sdkwork/generations-pc-workspace": "workspace:*",
+    "@sdkwork/iam-credential-entry": "workspace:*",
     "@sdkwork/sdk-common": "^1.0.3",
     "@sdkwork/ui-pc-react": "workspace:*",
     "react": "catalog:",
