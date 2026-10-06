@@ -127,7 +127,9 @@ impl GenerationsService {
         let created = state
             .repository
             .create(CreateGenerationParams {
-                tenant_id: command.tenant_id.clone(),
+                // Server-authoritative: the authenticated session tenant, never
+                // a client-supplied context selector (API_SPEC §10.0/§14).
+                tenant_id: context.http.tenant_id.clone(),
                 user_id: context.http.user_id.clone(),
                 modality: modality.to_string(),
                 operation_type: operation_type.to_string(),

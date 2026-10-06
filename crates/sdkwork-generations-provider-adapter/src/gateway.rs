@@ -8,7 +8,6 @@
 //! models owned here.
 
 use async_trait::async_trait;
-use cloudrouter_open_sdk::api::paths::ai_path;
 use cloudrouter_open_sdk::models::{
     ElevenLabsSoundGenerationRequest, ElevenLabsSoundGenerationResponse,
     ElevenLabsTextToSpeechRequest, ElevenLabsTextToSpeechResponse, KlingAvatarCreateRequest,
@@ -436,7 +435,12 @@ impl CloudRouterMediaGateway {
             client.set_access_token(access_token);
         }
         if let Some(api_key) = settings.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
-            client.set_api_key(api_key);
+            // The gateway's open-api face classifies an `Authorization` bearer
+            // as one half of a dual-token pair and rejects it when no
+            // Access-Token accompanies it. Server-to-server gateway API keys
+            // must therefore travel in the dedicated `X-Api-Key` header, which
+            // selects the API-key authentication branch.
+            client.set_header("X-Api-Key", api_key);
         }
         Ok(Self { client })
     }
@@ -501,9 +505,12 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &KlingImageGenerationRequest,
     ) -> Result<ProviderImageGenerationTask, SdkworkError> {
+        // Vendor-native faces live under their own namespace (`/kling/...`),
+        // matching the open-api contract exactly; `ai_path` would prepend the
+        // OpenAI `/v1` prefix and land the call on the wrong pipeline face.
         self.client
             .http_client()
-            .post(&ai_path("/kling/v1/images/generations"), Some(body), None, None, Some("application/json"))
+            .post("/kling/v1/images/generations", Some(body), None, None, Some("application/json"))
             .await
     }
 
@@ -514,7 +521,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         self.client
             .http_client()
             .get(
-                &ai_path(&format!("/kling/v1/tasks/{task_id}")),
+                &format!("/kling/v1/tasks/{task_id}"),
                 None,
                 None,
             )
@@ -525,10 +532,13 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &VolcengineImageGenerationRequest,
     ) -> Result<VolcengineImageGenerationResponse, SdkworkError> {
+        // Volcengine Ark's image surface is `/api/v3/...` under the
+        // `/volcengine` namespace — no OpenAI `/v1` prefix (`ai_path` would
+        // misroute the call onto the openai pipeline face).
         self.client
             .http_client()
             .post(
-                &ai_path("/volcengine/api/v3/images/generations"),
+                "/volcengine/api/v3/images/generations",
                 Some(body),
                 None,
                 None,
@@ -699,9 +709,12 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
             "/google/v1beta/models/{}:generateVideos",
             encode_path_segment(model)
         );
+        // The `/google` namespace must reach the gateway verbatim: `ai_path`
+        // would prepend the OpenAI `/v1` prefix and the gateway would classify
+        // the call as an unknown OpenAI-compatible route.
         self.client
             .http_client()
-            .post(&ai_path(&path), Some(body), None, None, Some("application/json"))
+            .post(&path, Some(body), None, None, Some("application/json"))
             .await
     }
 
@@ -712,7 +725,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         // The long-running operation name is a relative resource path
         // (`models/{model}/operations/{id}`); its separators must survive.
         let path = format!("/google/v1beta/{}", operation_name.trim().trim_start_matches('/'));
-        self.client.http_client().get(&ai_path(&path), None, None).await
+        self.client.http_client().get(&path, None, None).await
     }
 
     async fn suno_create_music_generation(

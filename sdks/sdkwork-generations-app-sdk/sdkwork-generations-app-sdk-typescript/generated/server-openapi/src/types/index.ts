@@ -30,6 +30,8 @@ export type { GenerationsImagesEditResponse202 } from './generations-images-edit
 export type { GenerationsVideosTextToResponse202 } from './generations-videos-text-to-response202';
 export type { GenerationsVideosImageToResponse202 } from './generations-videos-image-to-response202';
 export type { GenerationsVideosExtendResponse202 } from './generations-videos-extend-response202';
+export type { GenerationsVideosAvatarResponse202 } from './generations-videos-avatar-response202';
+export type { GenerationsVideosMotionMimicryResponse202 } from './generations-videos-motion-mimicry-response202';
 export type { GenerationsMusicTextToResponse202 } from './generations-music-text-to-response202';
 export type { GenerationsMusicLyricsToResponse202 } from './generations-music-lyrics-to-response202';
 export type { GenerationsSoundEffectsCreateResponse201 } from './generations-sound-effects-create-response201';

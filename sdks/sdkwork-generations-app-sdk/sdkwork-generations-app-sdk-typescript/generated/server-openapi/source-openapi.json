@@ -764,6 +764,232 @@
         "x-sdkwork-idempotent": true
       }
     },
+    "/app/v3/api/generations/videos/avatar": {
+      "post": {
+        "tags": [
+          "generationsApi"
+        ],
+        "operationId": "generations.videos.avatar",
+        "x-sdkwork-owner": "sdkwork-generations",
+        "x-sdkwork-api-authority": "sdkwork-generations-app-api",
+        "security": [
+          {
+            "AuthToken": [],
+            "AccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Client-supplied idempotency key scoped to the tenant."
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/GenerationCommand"
+        },
+        "responses": {
+          "202": {
+            "description": "Generation accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SdkWorkApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "data"
+                      ],
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "item"
+                          ],
+                          "properties": {
+                            "item": {
+                              "$ref": "#/components/schemas/GenerationCommandResponse"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        },
+        "x-sdkwork-idempotent": true
+      }
+    },
+    "/app/v3/api/generations/videos/motion_mimicry": {
+      "post": {
+        "tags": [
+          "generationsApi"
+        ],
+        "operationId": "generations.videos.motionMimicry",
+        "x-sdkwork-owner": "sdkwork-generations",
+        "x-sdkwork-api-authority": "sdkwork-generations-app-api",
+        "security": [
+          {
+            "AuthToken": [],
+            "AccessToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Client-supplied idempotency key scoped to the tenant."
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/GenerationCommand"
+        },
+        "responses": {
+          "202": {
+            "description": "Generation accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SdkWorkApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "data"
+                      ],
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "required": [
+                            "item"
+                          ],
+                          "properties": {
+                            "item": {
+                              "$ref": "#/components/schemas/GenerationCommandResponse"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        },
+        "x-sdkwork-idempotent": true
+      }
+    },
     "/app/v3/api/generations/music/text_to_music": {
       "post": {
         "tags": [
@@ -2387,16 +2613,9 @@
         "type": "object",
         "additionalProperties": true,
         "required": [
-          "tenantId",
           "prompt"
         ],
         "properties": {
-          "tenantId": {
-            "type": "string"
-          },
-          "organizationId": {
-            "type": "string"
-          },
           "prompt": {
             "type": "string"
           },
@@ -2413,7 +2632,8 @@
             "type": "object",
             "additionalProperties": true
           }
-        }
+        },
+        "description": "Command body for a generation creation. Tenant and organization context resolve from the authenticated session (API_SPEC §10.0/§14); clients MUST NOT supply context selector fields."
       },
       "GenerationActionRequest": {
         "type": "object",
@@ -2440,13 +2660,7 @@
       "SaveGenerationResultToAssetsRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "tenantId"
-        ],
         "properties": {
-          "tenantId": {
-            "type": "string"
-          },
           "collectionId": {
             "type": "string"
           },
@@ -2459,7 +2673,8 @@
               "type": "string"
             }
           }
-        }
+        },
+        "description": "Save-to-assets command. Tenant context resolves from the authenticated session; clients MUST NOT supply context selector fields."
       },
       "GenerationCommandResponse": {
         "type": "object",

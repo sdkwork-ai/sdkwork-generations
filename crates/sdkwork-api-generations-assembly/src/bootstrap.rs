@@ -188,7 +188,11 @@ mod repository {
             )
             .bind(&id)
             .bind(&params.tenant_id)
-            .bind(&params.organization_id)
+            // The baseline column is `NOT NULL DEFAULT '0'`; binding the Option
+            // directly would override that default with NULL for org-less
+            // sessions (the request context carries tenant/user only), so the
+            // column default is applied here instead.
+            .bind(params.organization_id.as_deref().unwrap_or("0"))
             .bind(&params.user_id)
             .bind(&params.modality)
             .bind(&params.operation_type)
@@ -381,8 +385,8 @@ mod repository {
         prompt_preview: Option<String>,
         favorite: bool,
         result_count: i32,
-        created_at: String,
-        updated_at: String,
+        created_at: sqlx::types::time::OffsetDateTime,
+        updated_at: sqlx::types::time::OffsetDateTime,
     }
 
     impl GenerationRecordRow {
@@ -400,8 +404,8 @@ mod repository {
                 prompt_preview: self.prompt_preview,
                 favorite: self.favorite,
                 result_count: self.result_count,
-                created_at: self.created_at,
-                updated_at: self.updated_at,
+                created_at: rfc3339_timestamp(self.created_at),
+                updated_at: rfc3339_timestamp(self.updated_at),
             }
         }
     }
@@ -554,7 +558,7 @@ mod repository {
         resource_snapshot: Option<serde_json::Value>,
         asset_id: Option<String>,
         preview_text: Option<String>,
-        created_at: String,
+        created_at: sqlx::types::time::OffsetDateTime,
     }
 
     impl GenerationResultRow {
@@ -573,7 +577,7 @@ mod repository {
                 .flatten(),
                 asset_id: self.asset_id,
                 preview_text: self.preview_text,
-                created_at: self.created_at,
+                created_at: rfc3339_timestamp(self.created_at),
             }
         }
     }
@@ -664,7 +668,7 @@ mod repository {
         event_type: String,
         message: Option<String>,
         payload: Option<serde_json::Value>,
-        created_at: String,
+        created_at: sqlx::types::time::OffsetDateTime,
     }
 
     impl TimelineEventRow {
@@ -675,9 +679,22 @@ mod repository {
                 event_type: self.event_type,
                 message: self.message,
                 payload: self.payload,
-                created_at: self.created_at,
+                created_at: rfc3339_timestamp(self.created_at),
             }
         }
+    }
+
+    /// Renders a baseline `TIMESTAMPTZ` column as the RFC 3339 text the
+    /// generation domain models carry. The row structs cannot bind `String`
+    /// directly: Postgres reports the column as TIMESTAMPTZ and sqlx (with the
+    /// `time` feature) only decodes that into `time::OffsetDateTime`.
+    fn rfc3339_timestamp(value: sqlx::types::time::OffsetDateTime) -> String {
+        chrono::DateTime::from_timestamp(
+            value.unix_timestamp(),
+            value.nanosecond() % 1_000_000_000,
+        )
+        .map(|datetime| datetime.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .unwrap_or_else(|| value.to_string())
     }
 
     // -----------------------------------------------------------------------

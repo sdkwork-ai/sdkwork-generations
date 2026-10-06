@@ -185,6 +185,14 @@ export interface GenerationsVideosVideoExtendParams {
   idempotencyKey: string;
 }
 
+export interface GenerationsVideosAvatarParams {
+  idempotencyKey: string;
+}
+
+export interface GenerationsVideosMotionMimicryParams {
+  idempotencyKey: string;
+}
+
 export class GenerationsVideosApi {
   private client: HttpClient;
 
@@ -221,6 +229,26 @@ async videoExtend(body: CreateGenerationCommandRequest, params: GenerationsVideo
       {}
     );
     return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/videos/video_extend`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
+  }
+
+async avatar(body: CreateGenerationCommandRequest, params: GenerationsVideosAvatarParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+    const requestHeaders = buildRequestHeaders(
+      {
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
+      },
+      {}
+    );
+    return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/videos/avatar`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
+  }
+
+async motionMimicry(body: CreateGenerationCommandRequest, params: GenerationsVideosMotionMimicryParams, requestOptions?: ApiRequestOptions): Promise<GenerationCommandResponse> {
+    const requestHeaders = buildRequestHeaders(
+      {
+        'Idempotency-Key': { value: params.idempotencyKey, style: 'simple', explode: false },
+      },
+      {}
+    );
+    return this.client.request<GenerationCommandResponse>(appApiPath(`/generations/videos/motion_mimicry`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', ...(requestHeaders !== undefined ? { headers: requestHeaders } : {}), sdkworkUnwrapKind: 'item' });
   }
 }
 

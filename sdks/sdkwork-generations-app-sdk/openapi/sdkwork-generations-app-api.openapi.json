@@ -2613,16 +2613,9 @@
         "type": "object",
         "additionalProperties": true,
         "required": [
-          "tenantId",
           "prompt"
         ],
         "properties": {
-          "tenantId": {
-            "type": "string"
-          },
-          "organizationId": {
-            "type": "string"
-          },
           "prompt": {
             "type": "string"
           },
@@ -2639,7 +2632,8 @@
             "type": "object",
             "additionalProperties": true
           }
-        }
+        },
+        "description": "Command body for a generation creation. Tenant and organization context resolve from the authenticated session (API_SPEC §10.0/§14); clients MUST NOT supply context selector fields."
       },
       "GenerationActionRequest": {
         "type": "object",
@@ -2666,13 +2660,7 @@
       "SaveGenerationResultToAssetsRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "tenantId"
-        ],
         "properties": {
-          "tenantId": {
-            "type": "string"
-          },
           "collectionId": {
             "type": "string"
           },
@@ -2685,7 +2673,8 @@
               "type": "string"
             }
           }
-        }
+        },
+        "description": "Save-to-assets command. Tenant context resolves from the authenticated session; clients MUST NOT supply context selector fields."
       },
       "GenerationCommandResponse": {
         "type": "object",

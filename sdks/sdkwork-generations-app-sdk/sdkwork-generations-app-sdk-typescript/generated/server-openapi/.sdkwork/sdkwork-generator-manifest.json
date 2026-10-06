@@ -44,7 +44,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "c83885356c7c15860719f22460238e3634d23b2714a3150c68dafc2e5bea4df5"
+      "sha256": "49491aba7ab461109e94924c6caf38a3e60bb65bb594164ed7e8707adf72667e"
     },
     {
       "path": "sdkwork-sdk.json",
@@ -56,7 +56,7 @@
     },
     {
       "path": "src/api/generations-api.ts",
-      "sha256": "de764343cbc1406c71910dcc45c462b0e43e5c39d58ca0ff205f1b7df1057312"
+      "sha256": "879ecbc7ddc9b29ea5a6facf282815c84354351b46ad6d41c62fa921faf51758"
     },
     {
       "path": "src/api/index.ts",
@@ -72,7 +72,7 @@
     },
     {
       "path": "src/http/client.ts",
-      "sha256": "868b7785497a93658b628de2d9b520d9d2456406bcf2ef717319beaa6913146d"
+      "sha256": "f0e93f51af678aadaf96d3e4b26e2224cb5f551b3f4651980630bbe1c7f1ceac"
     },
     {
       "path": "src/http/index.ts",
@@ -92,7 +92,7 @@
     },
     {
       "path": "src/types/create-generation-command-request.ts",
-      "sha256": "537279f80b8aed55d768053b6411cc9a833aa97be1f2c51e78a1dbd7e9643fc5"
+      "sha256": "a946a8550f9661e1b56d3169ad1f9f920ff120a17b5ff44fe12f66ecbbf7da7e"
     },
     {
       "path": "src/types/favorite-generation-request.ts",
@@ -195,12 +195,20 @@
       "sha256": "94c3a84eae4a065a2c0de8bb907e83225bbb820f1f71057eb566de0c704d76a5"
     },
     {
+      "path": "src/types/generations-videos-avatar-response202.ts",
+      "sha256": "1a4725b8b886e5892fe148755245493ad5f4943f101c46e783e6be832eb82e61"
+    },
+    {
       "path": "src/types/generations-videos-extend-response202.ts",
       "sha256": "be8b5af54c3ab05576ece363d5113aacfef0422dccea7ee28f93770b0ecb93c1"
     },
     {
       "path": "src/types/generations-videos-image-to-response202.ts",
       "sha256": "e2e99679cd2d02c196b903a6015e15ca8931ce6168b960b217d13e5cb5091e3a"
+    },
+    {
+      "path": "src/types/generations-videos-motion-mimicry-response202.ts",
+      "sha256": "194ae4be3fcbe70ccbe6f9c3ea98b6d62abec63ca57b060cef2c53d6f6792162"
     },
     {
       "path": "src/types/generations-videos-text-to-response202.ts",
@@ -220,7 +228,7 @@
     },
     {
       "path": "src/types/index.ts",
-      "sha256": "217765287e69198724b7490e567c0a9fd61bc9ecce94fe7ac6b63d1311b8f526"
+      "sha256": "fb0e48b0c8ae9547538b4273baec19bc8dd9643f6999e060ab184c23e3e63512"
     },
     {
       "path": "src/types/media-resource.ts",
@@ -236,7 +244,7 @@
     },
     {
       "path": "src/types/save-generation-result-to-assets-request.ts",
-      "sha256": "f6ae74b2e43262d0e61c2605757b4b507cfd8dc7371afa8ecd2921066fe6d02b"
+      "sha256": "448868d567260198f0b34a035cdf22383e23821cd01e0be014d561fd1a9967ff"
     },
     {
       "path": "src/types/sdk-work-api-response.ts",

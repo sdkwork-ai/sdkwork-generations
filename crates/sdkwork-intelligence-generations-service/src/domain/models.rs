@@ -208,11 +208,18 @@ pub struct MediaResource {
 // ---------------------------------------------------------------------------
 
 /// Request body for creating a generation command.
+///
+/// `tenantId`/`organizationId` are context selectors: API_SPEC §10.0/§14 forbid
+/// clients from supplying them on app surfaces, and the app-api boundary
+/// rejects such bodies before the handler runs. The fields stay on the struct
+/// with a serde default so direct (backend/internal) callers keep compiling;
+/// the HTTP layer always resolves the tenant from the authenticated session
+/// context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateGenerationCommandRequest {
-    #[serde(rename = "tenantId")]
+    #[serde(rename = "tenantId", default)]
     pub tenant_id: String,
-    #[serde(rename = "organizationId")]
+    #[serde(rename = "organizationId", default)]
     pub organization_id: Option<String>,
     pub prompt: String,
     pub model: Option<String>,
@@ -236,7 +243,7 @@ pub struct FavoriteGenerationRequest {
 /// Request body for saving a generation result to assets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveGenerationResultToAssetsRequest {
-    #[serde(rename = "tenantId")]
+    #[serde(rename = "tenantId", default)]
     pub tenant_id: String,
     #[serde(rename = "collectionId")]
     pub collection_id: Option<String>,

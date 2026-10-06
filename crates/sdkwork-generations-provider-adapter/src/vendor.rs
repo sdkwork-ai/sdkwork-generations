@@ -76,6 +76,11 @@ pub fn normalize_vendor(value: &str) -> String {
         "bytedance" | "byte_dance" | "volces" | "ark" | "doubao" | "seedream" | "seedance" => {
             VENDOR_VOLCENGINE.to_string()
         }
+        // The model catalog files Kling under its parent company code
+        // (`vendorCode: "kuaishou"`), while every dispatch surface — and the
+        // creative pickers that forward that code as `parameters.vendor` —
+        // must land on the Kling adapter.
+        "kuaishou" => VENDOR_KLING.to_string(),
         "jimeng" => VENDOR_JIMENG.to_string(),
         "eleven-labs" | "11labs" => VENDOR_ELEVENLABS.to_string(),
         _ => normalized,
@@ -365,6 +370,23 @@ mod tests {
         let selection = resolve_vendor(&command, "openai");
         assert_eq!(selection.vendor, VENDOR_NANO_BANANA);
         assert_eq!(selection.model, "gpt-image-2");
+    }
+
+    #[test]
+    fn resolves_catalog_vendor_code_kuaishou_to_the_kling_adapter() {
+        // The creative pickers submit the bare model id from the model catalog
+        // (`vendorCode: "kuaishou"`) together with `parameters.vendor`; without
+        // this alias the command falls back to the OpenAI default vendor and
+        // the Kling model id is sent to the wrong upstream.
+        let mut command = command_with_model("kling-v2-6");
+        command.parameters = Some(serde_json::json!({ "vendor": "kuaishou" }));
+        let selection = resolve_vendor(&command, "openai");
+        assert_eq!(selection.vendor, VENDOR_KLING);
+        assert_eq!(selection.model, "kling-v2-6");
+
+        let selection_from_prefix = resolve_vendor(&command_with_model("kuaishou/kling-v2-6"), "openai");
+        assert_eq!(selection_from_prefix.vendor, VENDOR_KLING);
+        assert_eq!(selection_from_prefix.model, "kling-v2-6");
     }
 
     #[test]
