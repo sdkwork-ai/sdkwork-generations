@@ -3,6 +3,9 @@ rust-version.workspace = true
 name = "sdkwork-generations-provider-adapter"
 version.workspace = true
 edition.workspace = true
+
+[lib]
+name = "sdkwork_generations_provider_adapter"
 license.workspace = true
 description = "Vendor adapters that dispatch sdkwork-generations commands through the cloudrouter Rust SDK."
 
