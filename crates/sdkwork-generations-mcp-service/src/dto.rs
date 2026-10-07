@@ -97,6 +97,9 @@ pub struct SynthesizeSpeechInput {
 pub struct GenerateMusicInput {
     /// Music description prompt (or lyrics when `lyrics` is absent).
     pub prompt: String,
+    /// Vendor slug (`suno`, `minimax`). Absent resolves the modality default.
+    #[serde(default)]
+    pub vendor: Option<String>,
     /// Style tags, for example `pop, upbeat`.
     #[serde(default)]
     pub tags: Option<String>,

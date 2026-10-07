@@ -237,6 +237,12 @@ impl GenerationsMcpService {
         Parameters(input): Parameters<GenerateMusicInput>,
     ) -> Result<Json<crate::dto::GenerationsToolOutput>, Json<GenerationsMcpToolError>> {
         let mut parameters = serde_json::Map::new();
+        // Vendor forwarding mirrors image.create: without it the modality
+        // default vendor (suno) applies and the LLM's vendor/model selection
+        // is silently dropped.
+        if let Some(vendor) = input.vendor.as_deref() {
+            parameters.insert("vendor".to_string(), Value::String(vendor.to_string()));
+        }
         if let Some(tags) = input.tags.as_deref() {
             parameters.insert("tags".to_string(), Value::String(tags.to_string()));
         }
