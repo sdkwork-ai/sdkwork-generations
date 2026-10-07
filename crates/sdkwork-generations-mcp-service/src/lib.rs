@@ -18,6 +18,7 @@ pub mod kernel_invoke;
 pub mod kernel_mcp;
 pub mod port;
 pub mod transport;
+pub mod wait;
 
 pub use dto::*;
 pub use handler::GenerationsMcpService;
@@ -92,6 +93,29 @@ pub(crate) fn generation_payload(
     }
 }
 
+/// Builds the `parameters.referenceImages` entries consumed by the vendor
+/// adapters: URLs become `{url}` entries and asset ids become `{assetId}`
+/// entries (both keys resolve server-side). An empty input yields `None` so
+/// callers only insert the parameter when references exist.
+pub(crate) fn reference_image_entries(
+    reference_images: &[String],
+    reference_asset_ids: &[String],
+) -> Option<Vec<serde_json::Value>> {
+    if reference_images.is_empty() && reference_asset_ids.is_empty() {
+        return None;
+    }
+    let mut entries = reference_images
+        .iter()
+        .map(|url| serde_json::json!({ "url": url }))
+        .collect::<Vec<_>>();
+    entries.extend(
+        reference_asset_ids
+            .iter()
+            .map(|asset_id| serde_json::json!({ "assetId": asset_id })),
+    );
+    Some(entries)
+}
+
 /// Map a generations error into the MCP tool error payload.
 pub(crate) fn tool_error(error: &GenerationsError) -> crate::dto::GenerationsMcpToolError {
     crate::dto::GenerationsMcpToolError {
@@ -132,6 +156,30 @@ mod tests {
         ] {
             assert!(names.contains(&expected.to_string()), "missing {expected}");
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_entries_tests {
+    #[test]
+    fn reference_entries_map_urls_and_asset_ids() {
+        let entries = crate::reference_image_entries(
+            &["https://cdn.example/a.png".to_string()],
+            &["asset.1".to_string()],
+        )
+        .expect("entries exist");
+        assert_eq!(
+            entries,
+            vec![
+                serde_json::json!({ "url": "https://cdn.example/a.png" }),
+                serde_json::json!({ "assetId": "asset.1" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn reference_entries_are_none_without_references() {
+        assert!(crate::reference_image_entries(&[], &[]).is_none());
     }
 }
 

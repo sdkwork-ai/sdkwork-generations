@@ -30,6 +30,11 @@ pub struct GenerateImageInput {
     /// Reference image URLs (turns the command into an image edit).
     #[serde(default)]
     pub reference_images: Vec<String>,
+    /// Asset ids of saved assets to reference (turns the command into an
+    /// image edit). Use these instead of URLs when the source material lives
+    /// in the assets catalog.
+    #[serde(default)]
+    pub reference_asset_ids: Vec<String>,
 }
 
 /// Input for `generation.video.create`.
@@ -56,6 +61,11 @@ pub struct GenerateVideoInput {
     /// Reference image URLs (first frame for image-to-video).
     #[serde(default)]
     pub reference_images: Vec<String>,
+    /// Asset ids of saved assets to reference (first frame for
+    /// image-to-video). Use these instead of URLs when the source material
+    /// lives in the assets catalog.
+    #[serde(default)]
+    pub reference_asset_ids: Vec<String>,
     /// Tail frame image URL for start-end to video vendors.
     #[serde(default)]
     pub last_frame: Option<String>,
@@ -113,6 +123,14 @@ pub struct GenerateMusicInput {
 pub struct GenerationRetrieveInput {
     /// Generation id returned by the create tool.
     pub generation_id: String,
+    /// When true (the default), poll until the generation settles or the wait
+    /// budget expires instead of returning the current snapshot immediately.
+    #[serde(default)]
+    pub wait: Option<bool>,
+    /// Wait budget in seconds, clamped to `[1, 120]` (default 90). Ignored
+    /// when `wait` is false.
+    #[serde(default)]
+    pub wait_timeout_seconds: Option<f64>,
 }
 
 /// Typed tool output shared by all generation tools.

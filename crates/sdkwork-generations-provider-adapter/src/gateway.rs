@@ -13,8 +13,7 @@ use cloudrouter_open_sdk::models::{
     ElevenLabsTextToSpeechRequest, ElevenLabsTextToSpeechResponse, KlingAvatarCreateRequest,
     KlingMotionControlRequest, KlingVideoGenerationRequest, KlingVideoGenerationTask,
     MiniMaxMusicGenerationRequest, MiniMaxMusicGenerationResponse,
-    NanoBananaImageGenerationRequest,
-    NanoBananaImageGenerationTask, OpenAiAudioTranscription, OpenAiAudioTranscriptionRequest,
+    OpenAiAudioTranscription, OpenAiAudioTranscriptionRequest,
     OpenAiAudioTranslation, OpenAiAudioTranslationRequest, OpenAiImageEditRequest,
     OpenAiImageGenerationRequest, OpenAiImageList, OpenAiSpeechCreateRequest, OpenAiVideo,
     OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia, ProviderTaskError,
@@ -79,20 +78,12 @@ pub trait MediaSdkGateway: Send + Sync {
         })
     }
 
-    async fn nano_banana_create_image_generation(
+    async fn gemini_create_image_generation(
         &self,
-        body: &NanoBananaImageGenerationRequest,
-    ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
-        Err(SdkworkError::HttpStatus {
-            status: 599,
-            body: "gateway method not wired in this test double".to_string(),
-        })
-    }
-
-    async fn nano_banana_retrieve_image_generation(
-        &self,
-        task_id: &str,
-    ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
+        model: &str,
+        body: &GeminiImageGenerationRequest,
+    ) -> Result<GeminiImageGenerationResponse, SdkworkError> {
+        let _ = (model, body);
         Err(SdkworkError::HttpStatus {
             status: 599,
             body: "gateway method not wired in this test double".to_string(),
@@ -467,20 +458,25 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         self.client.images().create_edit(body).await
     }
 
-    async fn nano_banana_create_image_generation(
+    async fn gemini_create_image_generation(
         &self,
-        body: &NanoBananaImageGenerationRequest,
-    ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
-        self.client.images_nano_banana().create_generations(body).await
-    }
-
-    async fn nano_banana_retrieve_image_generation(
-        &self,
-        task_id: &str,
-    ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
+        model: &str,
+        body: &GeminiImageGenerationRequest,
+    ) -> Result<GeminiImageGenerationResponse, SdkworkError> {
+        // The wired Gemini image ingress is the vendor-native
+        // `/google/v1beta/models/{model}:generateImages` face (the
+        // `/nano-banana/...` aggregator face is contract-published but the
+        // routing contract declares it unrouted). The path must reach the
+        // gateway verbatim — `ai_path` would prepend the OpenAI `/v1` prefix
+        // and the gateway would classify the call as an unknown
+        // OpenAI-compatible route.
+        let path = format!(
+            "/google/v1beta/models/{}:generateImages",
+            encode_path_segment(model)
+        );
         self.client
-            .images_nano_banana()
-            .retrieve_generations(task_id)
+            .http_client()
+            .post(&path, Some(body), None, None, Some("application/json"))
             .await
     }
 
@@ -897,6 +893,95 @@ impl GeminiVideoOperation {
     }
 }
 
+/// One Gemini image generation instance (`:generateImages` envelope).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiImageGenerationInstance {
+    pub prompt: String,
+    /// Optional reference image. The Gemini API expects base64-encoded bytes
+    /// (`image.bytesBase64Encoded`); the generations command plane carries
+    /// image URLs only, so image-conditioned instances are rejected upstream
+    /// of this envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<serde_json::Value>,
+}
+
+/// Tuning parameters for a Gemini image generation request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiImageGenerationParameters {
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sampleCount")]
+    pub sample_count: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "aspectRatio")]
+    pub aspect_ratio: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "personGeneration")]
+    pub person_generation: Option<String>,
+}
+
+/// Gemini image generation request (`models/{model}:generateImages`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiImageGenerationRequest {
+    pub instances: Vec<GeminiImageGenerationInstance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<GeminiImageGenerationParameters>,
+}
+
+/// One generated image prediction returned by a finished image generation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiImagePrediction {
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "bytesBase64Encoded")]
+    pub bytes_base64_encoded: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "mimeType")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "gcsUri")]
+    pub gcs_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// Gemini image generation response (`predictions` envelope).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiImageGenerationResponse {
+    #[serde(default)]
+    pub predictions: Vec<GeminiImagePrediction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ProviderTaskError>,
+}
+
+impl GeminiImageGenerationResponse {
+    /// Image locators from a finished generation, preferring hosted URLs over
+    /// inline bytes; inline predictions become `data:` URLs so the stored
+    /// result stays self-contained.
+    pub fn image_locators(&self) -> Vec<(String, Option<String>)> {
+        self.predictions
+            .iter()
+            .filter_map(|prediction| {
+                if let Some(url) = prediction
+                    .url
+                    .clone()
+                    .or_else(|| prediction.uri.clone())
+                    .or_else(|| prediction.gcs_uri.clone())
+                    .filter(|value| !value.trim().is_empty())
+                {
+                    return Some((url, prediction.mime_type.clone()));
+                }
+                let bytes = prediction.bytes_base64_encoded.as_deref()?;
+                if bytes.trim().is_empty() {
+                    return None;
+                }
+                let mime_type = prediction
+                    .mime_type
+                    .clone()
+                    .unwrap_or_else(|| "image/png".to_string());
+                Some((
+                    format!("data:{mime_type};base64,{bytes}"),
+                    Some(mime_type),
+                ))
+            })
+            .collect()
+    }
+}
+
 /// Percent-encodes a single path segment, preserving the unreserved set so
 /// gateway model ids travel without ambiguation.
 fn encode_path_segment(value: &str) -> String {
@@ -1027,9 +1112,8 @@ pub mod test_support {
         pub gemini_video_operation: Mutex<Option<GeminiVideoOperation>>,
         pub last_gemini_video_request: Mutex<Option<(String, GeminiVideoGenerationRequest)>>,
         pub last_gemini_video_operation_name: Mutex<Option<String>>,
-        pub nano_banana_create_task: Mutex<Option<NanoBananaImageGenerationTask>>,
-        pub last_nano_banana_create_request: Mutex<Option<NanoBananaImageGenerationRequest>>,
-        pub nano_banana_retrieve_task: Mutex<Option<NanoBananaImageGenerationTask>>,
+        pub gemini_image_generation: Mutex<Option<GeminiImageGenerationResponse>>,
+        pub last_gemini_image_request: Mutex<Option<(String, GeminiImageGenerationRequest)>>,
         pub kling_video_create_task: Mutex<Option<KlingVideoGenerationTask>>,
         pub last_kling_video_create_request: Mutex<Option<KlingVideoGenerationRequest>>,
         pub kling_video_retrieve_task: Mutex<Option<KlingVideoGenerationTask>>,
@@ -1063,9 +1147,8 @@ pub mod test_support {
                 gemini_video_operation: Mutex::new(None),
                 last_gemini_video_request: Mutex::new(None),
                 last_gemini_video_operation_name: Mutex::new(None),
-                nano_banana_create_task: Mutex::new(None),
-                last_nano_banana_create_request: Mutex::new(None),
-                nano_banana_retrieve_task: Mutex::new(None),
+                gemini_image_generation: Mutex::new(None),
+                last_gemini_image_request: Mutex::new(None),
                 kling_video_create_task: Mutex::new(None),
                 last_kling_video_create_request: Mutex::new(None),
                 kling_video_retrieve_task: Mutex::new(None),
@@ -1278,32 +1361,22 @@ pub mod test_support {
                 })
         }
 
-        async fn nano_banana_create_image_generation(
+        async fn gemini_create_image_generation(
             &self,
-            body: &NanoBananaImageGenerationRequest,
-        ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
-            *self.last_nano_banana_create_request.lock().unwrap() = Some(body.clone());
-            self.nano_banana_create_task
+            model: &str,
+            body: &GeminiImageGenerationRequest,
+        ) -> Result<GeminiImageGenerationResponse, SdkworkError> {
+            *self
+                .last_gemini_image_request
+                .lock()
+                .unwrap() = Some((model.to_string(), body.clone()));
+            self.gemini_image_generation
                 .lock()
                 .unwrap()
                 .clone()
                 .ok_or_else(|| SdkworkError::HttpStatus {
                     status: 599,
-                    body: "no scripted nano-banana create response".to_string(),
-                })
-        }
-
-        async fn nano_banana_retrieve_image_generation(
-            &self,
-            _task_id: &str,
-        ) -> Result<NanoBananaImageGenerationTask, SdkworkError> {
-            self.nano_banana_retrieve_task
-                .lock()
-                .unwrap()
-                .clone()
-                .ok_or_else(|| SdkworkError::HttpStatus {
-                    status: 599,
-                    body: "no scripted nano-banana retrieve response".to_string(),
+                    body: "no scripted gemini image generation response".to_string(),
                 })
         }
 

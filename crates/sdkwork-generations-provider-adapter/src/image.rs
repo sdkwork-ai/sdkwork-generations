@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
-    NanoBananaImageGenerationRequest, OpenAiImageEditRequest, OpenAiImageGenerationRequest,
+    OpenAiImageEditRequest, OpenAiImageGenerationRequest,
     OpenAiImageReferenceInputList, ProviderGeneratedMedia,
     ViduReferenceToImageRequest,
 };
@@ -22,7 +22,10 @@ use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
 
-use crate::gateway::{MediaSdkGateway, VolcengineImageGenerationRequest};
+use crate::gateway::{
+    GeminiImageGenerationInstance, GeminiImageGenerationParameters, GeminiImageGenerationRequest,
+    MediaSdkGateway, VolcengineImageGenerationRequest,
+};
 use crate::{
     failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome,
     task_event, with_resolved_vendor,
@@ -99,22 +102,10 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
         let inputs = GenerationCommandInputs::default();
         let vendor = vendor_from_record(record);
         match vendor.as_str() {
-            "nano-banana" => {
-                let task = self
-                    .gateway
-                    .nano_banana_retrieve_image_generation(task_id)
-                    .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
-                Ok(Some(self::surfaces::outcome_from_provider_task(
-                    record,
-                    &inputs,
-                    &vendor,
-                    task.task_id.as_deref().or(task.id.as_deref()),
-                    task.status.as_deref().or(task.state.as_deref()),
-                    task.images.clone().unwrap_or_default(),
-                    task.error.as_ref().map(crate::task_error_message),
-                )))
-            }
+            // The Gemini image face (`:generateImages`) is synchronous: a
+            // dispatched command either already carries its predictions or
+            // failed, so no vendor task id is ever persisted for it and the
+            // refresh path has nothing to poll.
             "kling" => {
                 let task = self
                     .gateway
@@ -228,21 +219,69 @@ mod surfaces {
         _selection: &VendorSelection,
         inputs: &GenerationCommandInputs,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
-        let request = NanoBananaImageGenerationRequest {
+        // The wired Gemini image ingress is the vendor-native
+        // `/google/v1beta/models/{model}:generateImages` face (the
+        // `/nano-banana/...` aggregator face is contract-published but the
+        // routing contract declares it unrouted, so the gateway answers it
+        // fail-closed). The surface is synchronous: predictions come back on
+        // the create response instead of a vendor task id.
+        //
+        // Gemini instances accept base64-encoded reference bytes only, while
+        // the command plane carries image URLs — reference-conditioned
+        // commands cannot be translated faithfully and fail honestly instead
+        // of silently dropping the references.
+        if !inputs.reference_images.is_empty() {
+            return Err(GenerationsError::InvalidInput(
+                "gemini image generation does not accept reference image URLs; supply base64-encoded image bytes".to_string(),
+            ));
+        }
+        let parameters = GeminiImageGenerationParameters {
+            sample_count: inputs.image_count,
             aspect_ratio: inputs.aspect_ratio.clone(),
-            callback_url: None,
-            images: (!inputs.reference_images.is_empty()).then(|| inputs.reference_images.clone()),
-            model: (!inputs.model.is_empty()).then(|| inputs.model.clone()),
-            prompt: inputs.prompt.clone(),
-            seed: inputs.seed,
-            size: inputs.size.clone(),
+            person_generation: None,
         };
-        let task = adapter
+        let request = GeminiImageGenerationRequest {
+            instances: vec![GeminiImageGenerationInstance {
+                prompt: inputs.prompt.clone(),
+                image: None,
+            }],
+            parameters: Some(parameters),
+        };
+        let response = adapter
             .gateway
-            .nano_banana_create_image_generation(&request)
+            .gemini_create_image_generation(&inputs.model, &request)
             .await
             .map_err(|error| GenerationsError::Provider(error.to_string()))?;
-        finish_task_dispatch(record, inputs, "nano-banana", task.task_id.as_deref().or(task.id.as_deref()), task.status.as_deref().or(task.state.as_deref()), task.images.clone().unwrap_or_default(), task.error.as_ref().map(crate::task_error_message))
+        if let Some(error) = response.error.as_ref() {
+            return Err(GenerationsError::Provider(crate::task_error_message(
+                error,
+            )));
+        }
+        let locators = response.image_locators();
+        if locators.is_empty() {
+            return Err(GenerationsError::Provider(
+                "gemini image generation finished without media".to_string(),
+            ));
+        }
+        let media = locators
+            .iter()
+            .map(|(locator, _)| ProviderGeneratedMedia {
+                url: Some(locator.clone()),
+                ..ProviderGeneratedMedia::default()
+            })
+            .collect::<Vec<_>>();
+        let results = locators
+            .iter()
+            .map(|(locator, mime_type)| image_result(record, locator, mime_type.as_deref()))
+            .collect::<Vec<_>>();
+        let mut usage = crate::usage::usage_from_media(
+            "google",
+            inputs,
+            &media,
+            crate::usage::MediaUsageKind::Image,
+        );
+        usage.model = Some(inputs.model.clone()).filter(|value| !value.is_empty());
+        Ok(finish_outcome(record, results, Some(usage)))
     }
 
     pub(super) async fn dispatch_vidu(

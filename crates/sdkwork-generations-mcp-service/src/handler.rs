@@ -76,17 +76,14 @@ impl GenerationsMcpService {
         if input.size.is_some() {
             parameters.insert("size".to_string(), serde_json::json!(input.size));
         }
-        if !input.reference_images.is_empty() {
-            parameters.insert(
-                "referenceImages".to_string(),
-                serde_json::json!(input
-                    .reference_images
-                    .iter()
-                    .map(|url| serde_json::json!({ "url": url }))
-                    .collect::<Vec<_>>()),
-            );
+        if let Some(references) =
+            crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
+        {
+            parameters.insert("referenceImages".to_string(), serde_json::json!(references));
         }
-        let operation_type = if input.reference_images.is_empty() {
+        let operation_type = if input.reference_images.is_empty()
+            && input.reference_asset_ids.is_empty()
+        {
             "text_to_image"
         } else {
             "image_edit"
@@ -112,13 +109,13 @@ impl GenerationsMcpService {
 
     #[tool(
         name = "generation.image.retrieve",
-        description = "Retrieve an image generation (status plus result URLs) by generation id."
+        description = "Retrieve an image generation (status plus result URLs) by generation id. Waits for completion by default (up to the waitTimeoutSeconds budget)."
     )]
     async fn image_retrieve(
         &self,
         Parameters(input): Parameters<GenerationRetrieveInput>,
     ) -> Result<Json<crate::dto::GenerationsToolOutput>, Json<GenerationsMcpToolError>> {
-        self.retrieve(input.generation_id).await
+        self.retrieve(input).await
     }
 
     #[tool(
@@ -146,20 +143,17 @@ impl GenerationsMcpService {
                 }),
             );
         }
-        if !input.reference_images.is_empty() {
-            parameters.insert(
-                "referenceImages".to_string(),
-                serde_json::json!(input
-                    .reference_images
-                    .iter()
-                    .map(|url| serde_json::json!({ "url": url }))
-                    .collect::<Vec<_>>()),
-            );
+        if let Some(references) =
+            crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
+        {
+            parameters.insert("referenceImages".to_string(), serde_json::json!(references));
         }
         if let Some(last_frame) = input.last_frame.as_deref() {
             parameters.insert("imageTail".to_string(), Value::String(last_frame.to_string()));
         }
-        let operation_type = if input.reference_images.is_empty() {
+        let operation_type = if input.reference_images.is_empty()
+            && input.reference_asset_ids.is_empty()
+        {
             "text_to_video"
         } else {
             "image_to_video"
@@ -185,13 +179,13 @@ impl GenerationsMcpService {
 
     #[tool(
         name = "generation.video.retrieve",
-        description = "Retrieve a video generation (status plus result URLs) by generation id."
+        description = "Retrieve a video generation (status plus result URLs) by generation id. Waits for completion by default (up to the waitTimeoutSeconds budget)."
     )]
     async fn video_retrieve(
         &self,
         Parameters(input): Parameters<GenerationRetrieveInput>,
     ) -> Result<Json<crate::dto::GenerationsToolOutput>, Json<GenerationsMcpToolError>> {
-        self.retrieve(input.generation_id).await
+        self.retrieve(input).await
     }
 
     #[tool(
@@ -290,26 +284,33 @@ impl GenerationsMcpService {
 
     #[tool(
         name = "generation.music.retrieve",
-        description = "Retrieve a music generation (status plus track URLs) by generation id."
+        description = "Retrieve a music generation (status plus track URLs) by generation id. Waits for completion by default (up to the waitTimeoutSeconds budget)."
     )]
     async fn music_retrieve(
         &self,
         Parameters(input): Parameters<GenerationRetrieveInput>,
     ) -> Result<Json<crate::dto::GenerationsToolOutput>, Json<GenerationsMcpToolError>> {
-        self.retrieve(input.generation_id).await
+        self.retrieve(input).await
     }
 }
 
 impl GenerationsMcpService {
     async fn retrieve(
         &self,
-        generation_id: String,
+        input: crate::dto::GenerationRetrieveInput,
     ) -> Result<Json<crate::dto::GenerationsToolOutput>, Json<GenerationsMcpToolError>> {
-        let record = self
-            .port
-            .get_generation(&generation_id)
-            .await
-            .map_err(|error| Json(tool_error(&error)))?;
+        let wait = input.wait.unwrap_or(true);
+        let budget = crate::wait::clamp_wait_seconds(input.wait_timeout_seconds);
+        let record = if wait {
+            crate::wait::wait_for_settlement(&self.port, &input.generation_id, budget)
+                .await
+                .map_err(|error| Json(tool_error(&error)))?
+        } else {
+            self.port
+                .get_generation(&input.generation_id)
+                .await
+                .map_err(|error| Json(tool_error(&error)))?
+        };
         let results = self
             .results(&record.id)
             .await
@@ -348,7 +349,9 @@ impl ServerHandler for GenerationsMcpService {
             .with_instructions(
                 "Media generation tools: generation.image.create, generation.video.create, \
                  generation.speech.create, generation.music.create. Async vendors return a \
-                 generation id; use the matching retrieve tool to poll for finished results.",
+                 generation id; the matching retrieve tool waits for completion by default \
+                 and returns the finished results (or the in-flight snapshot once its wait \
+                 budget expires).",
             )
     }
 

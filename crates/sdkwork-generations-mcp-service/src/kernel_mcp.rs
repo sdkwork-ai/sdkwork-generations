@@ -71,7 +71,7 @@ impl GenerationsMcpProvider {
             ),
             self.descriptor(
                 "image.retrieve",
-                "Retrieve an image generation by generation id.",
+                "Retrieve an image generation by generation id. Waits for completion by default (up to the waitTimeoutSeconds budget).",
                 serde_json::to_value(schemars::schema_for!(GenerationRetrieveInput)).expect("retrieve schema serializes"),
                 "media.generation.image.read",
             ),
@@ -83,7 +83,7 @@ impl GenerationsMcpProvider {
             ),
             self.descriptor(
                 "video.retrieve",
-                "Retrieve a video generation by generation id.",
+                "Retrieve a video generation by generation id. Waits for completion by default (up to the waitTimeoutSeconds budget).",
                 serde_json::to_value(schemars::schema_for!(GenerationRetrieveInput)).expect("retrieve schema serializes"),
                 "media.generation.video.read",
             ),
@@ -101,7 +101,7 @@ impl GenerationsMcpProvider {
             ),
             self.descriptor(
                 "music.retrieve",
-                "Retrieve a music generation by generation id.",
+                "Retrieve a music generation by generation id. Waits for completion by default (up to the waitTimeoutSeconds budget).",
                 serde_json::to_value(schemars::schema_for!(GenerationRetrieveInput)).expect("retrieve schema serializes"),
                 "media.generation.music.read",
             ),

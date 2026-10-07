@@ -24,7 +24,8 @@ Speech synthesis: openai (gpt-4o-mini-tts), transcription and translation via wh
 Music generation: suno (text-to-music and lyrics-to-music).
 
 Vendor dispatch happens through the cloudrouter media gateway (account-pool routed).
-Async vendors expose generation.retrieve tools; poll with the returned generation id.
+Async vendors expose generation.retrieve tools; a retrieve waits for completion \
+by default (budget clamped to ~2 minutes) and returns the final or in-flight snapshot.
 ";
 
 /// Invoke a generations tool by its unnamespaced tool name.
@@ -67,17 +68,13 @@ fn create_image(
     if input.size.is_some() {
         parameters.insert("size".to_string(), serde_json::json!(input.size));
     }
-    if !input.reference_images.is_empty() {
-        parameters.insert(
-            "referenceImages".to_string(),
-            serde_json::json!(input
-                .reference_images
-                .iter()
-                .map(|url| serde_json::json!({ "url": url }))
-                .collect::<Vec<_>>()),
-        );
+    if let Some(references) =
+        crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
+    {
+        parameters.insert("referenceImages".to_string(), serde_json::json!(references));
     }
-    let operation_type = if input.reference_images.is_empty() {
+    let operation_type = if input.reference_images.is_empty() && input.reference_asset_ids.is_empty()
+    {
         "text_to_image"
     } else {
         "image_edit"
@@ -114,20 +111,16 @@ fn create_video(
             }),
         );
     }
-    if !input.reference_images.is_empty() {
-        parameters.insert(
-            "referenceImages".to_string(),
-            serde_json::json!(input
-                .reference_images
-                .iter()
-                .map(|url| serde_json::json!({ "url": url }))
-                .collect::<Vec<_>>()),
-        );
+    if let Some(references) =
+        crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
+    {
+        parameters.insert("referenceImages".to_string(), serde_json::json!(references));
     }
     if let Some(last_frame) = input.last_frame.as_deref() {
         parameters.insert("imageTail".to_string(), serde_json::json!(last_frame));
     }
-    let operation_type = if input.reference_images.is_empty() {
+    let operation_type = if input.reference_images.is_empty() && input.reference_asset_ids.is_empty()
+    {
         "text_to_video"
     } else {
         "image_to_video"
@@ -209,12 +202,16 @@ fn create_music(
 fn retrieve(port: &Arc<dyn GenerationsMcpPort>, arguments_json: &str) -> Result<String, String> {
     let input: GenerationRetrieveInput = parse_arguments(arguments_json)?;
     let generation_id = input.generation_id;
+    let wait = input.wait.unwrap_or(true);
+    let budget = crate::wait::clamp_wait_seconds(input.wait_timeout_seconds);
     blocking_runtime().block_on(async move {
         let port = Arc::clone(port);
-        let record = port
-            .get_generation(&generation_id)
-            .await
-            .map_err(|error| error.to_string())?;
+        let record = if wait {
+            crate::wait::wait_for_settlement(&port, &generation_id, budget).await
+        } else {
+            port.get_generation(&generation_id).await
+        }
+        .map_err(|error| error.to_string())?;
         let (results, _) = port
             .list_results(
                 &generation_id,
