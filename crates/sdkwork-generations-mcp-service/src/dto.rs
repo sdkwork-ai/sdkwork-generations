@@ -27,6 +27,10 @@ pub struct GenerateImageInput {
     /// Requested quality tier when the vendor supports it.
     #[serde(default)]
     pub quality: Option<String>,
+    /// Reproducibility seed consumed by vendors that support one (Gemini
+    /// image, Volcengine Seedream).
+    #[serde(default)]
+    pub seed: Option<i64>,
     /// Reference image URLs (turns the command into an image edit).
     #[serde(default)]
     pub reference_images: Vec<String>,
@@ -58,6 +62,9 @@ pub struct GenerateVideoInput {
     /// Requested resolution, for example `1080p`.
     #[serde(default)]
     pub resolution: Option<String>,
+    /// Reproducibility seed consumed by vendors that support one (Vidu).
+    #[serde(default)]
+    pub seed: Option<i64>,
     /// Reference image URLs (first frame for image-to-video).
     #[serde(default)]
     pub reference_images: Vec<String>,

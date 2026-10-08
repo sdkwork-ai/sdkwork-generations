@@ -76,6 +76,9 @@ impl GenerationsMcpService {
         if input.size.is_some() {
             parameters.insert("size".to_string(), serde_json::json!(input.size));
         }
+        if let Some(seed) = input.seed {
+            parameters.insert("seed".to_string(), serde_json::json!(seed));
+        }
         if let Some(references) =
             crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
         {
@@ -142,6 +145,9 @@ impl GenerationsMcpService {
                     "resolution": input.resolution,
                 }),
             );
+        }
+        if let Some(seed) = input.seed {
+            parameters.insert("seed".to_string(), serde_json::json!(seed));
         }
         if let Some(references) =
             crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
