@@ -277,7 +277,7 @@ mod repository {
                 "UPDATE generation_record SET status = 'canceled', updated_at = $2 WHERE id = $1 AND status NOT IN ('succeeded', 'failed', 'canceled')"
             )
             .bind(id)
-            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(chrono::Utc::now())
             .execute(&self.pool)
             .await?
             .rows_affected();
@@ -298,7 +298,7 @@ mod repository {
                 "UPDATE generation_record SET status = 'queued', updated_at = $2 WHERE id = $1 AND status IN ('failed', 'canceled')"
             )
             .bind(id)
-            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(chrono::Utc::now())
             .execute(&self.pool)
             .await?
             .rows_affected();
@@ -320,7 +320,7 @@ mod repository {
             )
             .bind(id)
             .bind(favorite)
-            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(chrono::Utc::now())
             .execute(&self.pool)
             .await?
             .rows_affected();

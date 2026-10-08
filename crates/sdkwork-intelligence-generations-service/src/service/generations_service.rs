@@ -122,6 +122,7 @@ impl GenerationsService {
         operation_type: &str,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
+        validate_creation_parameters(&command.parameters)?;
         let provider = resolve_provider(state, &modality, operation_type)?;
 
         let created = state
@@ -738,6 +739,128 @@ pub async fn refresh_pending_generation(
             );
             Some(record)
         }
+    }
+}
+
+/// Rejects creation parameters that are structurally invalid for every
+/// vendor, before a record is created or a provider is contacted.
+///
+/// Only clearly-impossible shapes are rejected here (negative counts and
+/// durations, out-of-range multipliers, malformed ratio patterns); vendor
+/// specific ranges stay with the vendor adapters, whose honest provider
+/// errors surface as `generations_tool_failed` results.
+fn validate_creation_parameters(
+    parameters: &Option<serde_json::Value>,
+) -> Result<(), GenerationsError> {
+    use serde_json::Value;
+    let Some(params) = parameters.as_ref().and_then(serde_json::Value::as_object) else {
+        return Ok(());
+    };
+    let config = params
+        .get("generationConfig")
+        .or_else(|| params.get("generation_config"))
+        .and_then(Value::as_object);
+    let invalid = |what: &str| GenerationsError::InvalidInput(what.to_string());
+
+    if let Some(count) = config
+        .and_then(|config| config.get("imageCount"))
+        .and_then(Value::as_i64)
+    {
+        if !(1..=20).contains(&count) {
+            return Err(invalid("generationConfig.imageCount must be between 1 and 20"));
+        }
+    }
+    if let Some(duration) = config
+        .and_then(|config| config.get("durationSeconds"))
+        .and_then(Value::as_f64)
+    {
+        if !(0.0..=3600.0).contains(&duration) || duration == 0.0 {
+            return Err(invalid(
+                "generationConfig.durationSeconds must be greater than 0 and at most 3600",
+            ));
+        }
+    }
+    if let Some(ratio) = config
+        .and_then(|config| config.get("aspectRatio"))
+        .and_then(Value::as_str)
+    {
+        let ok = {
+            let parts: Vec<&str> = ratio.split(':').collect();
+            parts.len() == 2
+                && parts
+                    .iter()
+                    .all(|part| !part.trim().is_empty() && part.trim().parse::<u32>().is_ok())
+        };
+        if !ok {
+            return Err(invalid(
+                "generationConfig.aspectRatio must look like `16:9` (positive integers)",
+            ));
+        }
+    }
+    let number_from = |keys: &[&str]| -> Option<f64> {
+        let sources: [Option<&serde_json::Map<String, Value>>; 2] = [Some(params), config];
+        for source in sources.into_iter().flatten() {
+            for key in keys {
+                if let Some(value) = source.get(*key).and_then(Value::as_f64) {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    };
+    if let Some(speed) = number_from(&["speed"]) {
+        if !(0.1..=10.0).contains(&speed) {
+            return Err(invalid("speed must be between 0.1 and 10"));
+        }
+    }
+    if let Some(seed) = number_from(&["seed"]) {
+        if seed < 0.0 || seed.fract() != 0.0 {
+            return Err(invalid("seed must be a non-negative integer"));
+        }
+    }
+    if let Some(cfg) = number_from(&["cfgScale", "cfg_scale", "promptInfluence"]) {
+        if !(0.0..=10.0).contains(&cfg) {
+            return Err(invalid("cfgScale must be between 0 and 10"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn validate(parameters: serde_json::Value) -> Result<(), GenerationsError> {
+        validate_creation_parameters(&Some(parameters))
+    }
+
+    #[test]
+    fn well_formed_parameters_pass() {
+        assert!(validate(json!({
+            "vendor": "kling",
+            "generationConfig": { "durationSeconds": 5, "aspectRatio": "16:9", "imageCount": 2 },
+            "seed": 42,
+            "cfgScale": 0.8,
+        })).is_ok());
+        assert!(validate(json!({ "speed": 1.2, "voice": "alloy" })).is_ok());
+        assert!(validate(serde_json::Value::Null).is_ok());
+    }
+
+    #[test]
+    fn impossible_counts_durations_and_ratios_fail() {
+        assert!(validate(json!({ "generationConfig": { "imageCount": -3 } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "imageCount": 500 } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "durationSeconds": -60 } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "durationSeconds": 99999 } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "aspectRatio": "not-a-ratio" } })).is_err());
+    }
+
+    #[test]
+    fn out_of_range_multipliers_fail() {
+        assert!(validate(json!({ "speed": 100 })).is_err());
+        assert!(validate(json!({ "seed": -1 })).is_err());
+        assert!(validate(json!({ "cfgScale": 99 })).is_err());
     }
 }
 
