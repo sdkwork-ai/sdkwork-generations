@@ -790,7 +790,7 @@ fn validate_creation_parameters(
             let parts: Vec<&str> = size.split('x').collect();
             parts.len() == 2
                 && parts.iter().all(|part| {
-                    part.parse::<u32>().map(|dimension| (1..=8192).contains(&dimension)).is_ok()
+                    part.parse::<u32>().is_ok_and(|dimension| (1..=8192).contains(&dimension))
                 })
         };
         if !ok {
@@ -871,6 +871,13 @@ mod validation_tests {
         assert!(validate(json!({ "generationConfig": { "durationSeconds": -60 } })).is_err());
         assert!(validate(json!({ "generationConfig": { "durationSeconds": 99999 } })).is_err());
         assert!(validate(json!({ "generationConfig": { "aspectRatio": "not-a-ratio" } })).is_err());
+    }
+
+    #[test]
+    fn out_of_bounds_image_size_fails() {
+        assert!(validate(json!({ "size": "999999x1" })).is_err());
+        assert!(validate(json!({ "size": "0x0" })).is_err());
+        assert!(validate(json!({ "size": "1024x1024" })).is_ok());
     }
 
     #[test]
