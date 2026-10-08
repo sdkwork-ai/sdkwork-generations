@@ -127,6 +127,27 @@ pub struct GenerateMusicInput {
     pub model: Option<String>,
 }
 
+/// Input for the sound-effect tool (`sound-effect.generate`).
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateSoundEffectInput {
+    /// Natural-language description of the sound effect.
+    pub prompt: String,
+    /// Vendor slug (`elevenlabs`). Absent resolves the modality default.
+    #[serde(default)]
+    pub vendor: Option<String>,
+    /// Sound-effect model id or Cloud Router catalog key.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Requested duration in seconds. The curated tool schema names this
+    /// argument `duration`; the alias keeps both wire spellings working.
+    #[serde(default, alias = "duration")]
+    pub duration_seconds: Option<f64>,
+    /// Audio response format, for example `mp3` or `wav`.
+    #[serde(default)]
+    pub response_format: Option<String>,
+}
+
 /// Input for retrieval tools.
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(rename_all = "camelCase")]

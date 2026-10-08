@@ -43,10 +43,22 @@ pub fn resolve_vendor(command: &CreateGenerationCommandRequest, default_vendor: 
         .filter(|value| !value.is_empty());
 
     if let Some(vendor) = explicit_vendor {
-        return VendorSelection {
-            vendor: normalize_vendor(vendor),
-            model: raw_model.to_string(),
+        let vendor = normalize_vendor(vendor);
+        // An explicit vendor wins, but a redundant `vendor/model` prefix on the
+        // model id must still be stripped — the wire model is documented as the
+        // vendor-stripped id, and `vidu/viduq2` sent verbatim would be rejected
+        // by the upstream as an unknown model.
+        let model = match raw_model.split_once('/') {
+            Some((prefix, rest))
+                if !prefix.trim().is_empty()
+                    && !rest.trim().is_empty()
+                    && normalize_vendor(prefix) == vendor =>
+            {
+                rest.trim().to_string()
+            }
+            _ => raw_model.to_string(),
         };
+        return VendorSelection { vendor, model };
     }
 
     if let Some((prefix, model)) = raw_model.split_once('/') {
@@ -387,6 +399,27 @@ mod tests {
         let selection_from_prefix = resolve_vendor(&command_with_model("kuaishou/kling-v2-6"), "openai");
         assert_eq!(selection_from_prefix.vendor, VENDOR_KLING);
         assert_eq!(selection_from_prefix.model, "kling-v2-6");
+    }
+
+    #[test]
+    fn explicit_vendor_still_strips_a_redundant_matching_model_prefix() {
+        // `parameters.vendor` wins over the model prefix, but the wire model
+        // stays the vendor-stripped id: `vidu/viduq2` sent verbatim would be
+        // rejected by the upstream as an unknown model.
+        let mut command = command_with_model("vidu/viduq2");
+        command.parameters = Some(serde_json::json!({ "vendor": "vidu" }));
+        let selection = resolve_vendor(&command, "openai");
+        assert_eq!(selection.vendor, "vidu");
+        assert_eq!(selection.model, "viduq2");
+
+        // A prefix that normalizes to a DIFFERENT vendor than the explicit one
+        // is kept verbatim — the caller's model id is authoritative and the
+        // conflicting prefix is not ours to rewrite.
+        let mut conflicting = command_with_model("kling/viduq2");
+        conflicting.parameters = Some(serde_json::json!({ "vendor": "vidu" }));
+        let selection = resolve_vendor(&conflicting, "openai");
+        assert_eq!(selection.vendor, "vidu");
+        assert_eq!(selection.model, "kling/viduq2");
     }
 
     #[test]
