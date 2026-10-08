@@ -780,6 +780,23 @@ fn validate_creation_parameters(
             ));
         }
     }
+    if let Some(size) = params
+        .get("size")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let ok = {
+            let parts: Vec<&str> = size.split('x').collect();
+            parts.len() == 2
+                && parts.iter().all(|part| {
+                    part.parse::<u32>().map(|dimension| (1..=8192).contains(&dimension)).is_ok()
+                })
+        };
+        if !ok {
+            return Err(invalid("size must look like `1024x1024` with sides between 1 and 8192"));
+        }
+    }
     if let Some(ratio) = config
         .and_then(|config| config.get("aspectRatio"))
         .and_then(Value::as_str)
