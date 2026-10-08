@@ -65,6 +65,15 @@ pub struct GenerateVideoInput {
     /// Reproducibility seed consumed by vendors that support one (Vidu).
     #[serde(default)]
     pub seed: Option<i64>,
+    /// Negative prompt steering the vendor away from content (Kling).
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    /// Generation quality mode (Kling: `standard` / `pro`).
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Prompt adherence scale (Kling cfg scale).
+    #[serde(default)]
+    pub cfg_scale: Option<f64>,
     /// Reference image URLs (first frame for image-to-video).
     #[serde(default)]
     pub reference_images: Vec<String>,
@@ -122,6 +131,12 @@ pub struct GenerateMusicInput {
     /// Negative tags to steer the vendor away from styles.
     #[serde(default)]
     pub negative_tags: Option<String>,
+    /// Generate an instrumental track (no vocals) when the vendor supports it.
+    #[serde(default)]
+    pub is_instrumental: Option<bool>,
+    /// Let the vendor optimize supplied lyrics when it supports it.
+    #[serde(default)]
+    pub lyrics_optimizer: Option<bool>,
     /// Provider music model id.
     #[serde(default)]
     pub model: Option<String>,

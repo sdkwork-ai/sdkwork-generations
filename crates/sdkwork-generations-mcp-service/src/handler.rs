@@ -149,6 +149,15 @@ impl GenerationsMcpService {
         if let Some(seed) = input.seed {
             parameters.insert("seed".to_string(), serde_json::json!(seed));
         }
+        if let Some(negative_prompt) = input.negative_prompt.as_deref() {
+            parameters.insert("negativePrompt".to_string(), Value::String(negative_prompt.to_string()));
+        }
+        if let Some(mode) = input.mode.as_deref() {
+            parameters.insert("mode".to_string(), Value::String(mode.to_string()));
+        }
+        if let Some(cfg_scale) = input.cfg_scale {
+            parameters.insert("cfgScale".to_string(), serde_json::json!(cfg_scale));
+        }
         if let Some(references) =
             crate::reference_image_entries(&input.reference_images, &input.reference_asset_ids)
         {
@@ -243,6 +252,12 @@ impl GenerationsMcpService {
         Parameters(input): Parameters<GenerateMusicInput>,
     ) -> Result<Json<crate::dto::GenerationsToolOutput>, Json<GenerationsMcpToolError>> {
         let mut parameters = serde_json::Map::new();
+        if let Some(is_instrumental) = input.is_instrumental {
+            parameters.insert("isInstrumental".to_string(), serde_json::json!(is_instrumental));
+        }
+        if let Some(lyrics_optimizer) = input.lyrics_optimizer {
+            parameters.insert("lyricsOptimizer".to_string(), serde_json::json!(lyrics_optimizer));
+        }
         // Vendor forwarding mirrors image.create: without it the modality
         // default vendor (suno) applies and the LLM's vendor/model selection
         // is silently dropped.
