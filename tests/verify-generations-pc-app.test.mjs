@@ -41,7 +41,7 @@ test("generations PC app root follows the SDKWork PC application shape", () => {
     ".sdkwork/README.md",
     ".sdkwork/skills/README.md",
     ".sdkwork/plugins/README.md",
-    "sdkwork.app.config.json",
+    "agent.app.config.json",
     "package.json",
     "pnpm-workspace.yaml",
     "src/App.tsx",
@@ -54,9 +54,9 @@ test("generations PC app root follows the SDKWork PC application shape", () => {
     assert.ok(existsSync(path.join(appRoot, relativePath)), `${relativePath} must exist`);
   }
 
-  const appManifest = readJson(path.join(appRoot, "sdkwork.app.config.json"));
+  const appManifest = readJson(path.join(appRoot, "agent.app.config.json"));
   assert.equal(appManifest.schemaVersion, 3);
-  assert.equal(appManifest.kind, "sdkwork.app");
+  assert.equal(appManifest.kind, "agent.app");
   assert.equal(appManifest.app?.key, "sdkwork-generations-pc");
 
   const componentSpec = readJson(path.join(appRoot, "specs", "component.spec.json"));

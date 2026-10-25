@@ -18,13 +18,13 @@ Do not copy root standard text into this application. Use relative links into `.
 
 ## Application Identity
 
-This root is the SDKWork Generations Flutter mobile application. Read `sdkwork.app.config.json`, `specs/`, and package-local specs before changing app behavior, runtime config, SDK wiring, release metadata, or app-owned capabilities.
+This root is the SDKWork Generations Flutter mobile application. Read `agent.app.config.json`, `specs/`, and package-local specs before changing app behavior, runtime config, SDK wiring, release metadata, or app-owned capabilities.
 
 ## Local Dictionary Structure
 
 - `AGENTS.md`: application-level agent entrypoint.
 - `CLAUDE.md`, `GEMINI.md`, `CODEX.md`: compatibility shims that point to `AGENTS.md`.
-- `sdkwork.app.config.json`: application manifest.
+- `agent.app.config.json`: application manifest.
 - `.sdkwork/`: source-controlled app workspace metadata, skills, and plugins.
 - `lib/`: thin bootstrap, providers, shell assembly, and route registry only.
 - `packages/`: app, console, admin, core, commons, shell, and host packages.

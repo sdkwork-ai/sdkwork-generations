@@ -16,7 +16,7 @@ function readText(relativePath) {
 }
 
 test("sdkwork-generations-pc composes the user-facing workspace package", () => {
-  const appManifest = readJson("sdkwork.app.config.json");
+  const appManifest = readJson("agent.app.config.json");
   const appPackage = readJson("package.json");
   const workspacePackage = readJson("packages/sdkwork-generations-pc-workspace/package.json");
 

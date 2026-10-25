@@ -38,7 +38,7 @@ sdkwork-generations-pc/
 ├── CLAUDE.md                    # ✅ Claude兼容性垫片
 ├── GEMINI.md                    # ✅ Gemini兼容性垫片
 ├── CODEX.md                     # ✅ Codex兼容性垫片
-├── sdkwork.app.config.json      # ✅ 应用清单
+├── agent.app.config.json      # ✅ 应用清单
 ├── package.json                 # ✅ 包配置
 ├── specs/                       # ✅ 本地规范
 ├── src/                         # ✅ 源代码
@@ -66,7 +66,7 @@ sdkwork-generations-h5/
 ├── CLAUDE.md                    # ✅ Claude兼容性垫片
 ├── GEMINI.md                    # ✅ Gemini兼容性垫片
 ├── CODEX.md                     # ✅ Codex兼容性垫片
-├── sdkwork.app.config.json      # ✅ 应用清单
+├── agent.app.config.json      # ✅ 应用清单
 ├── package.json                 # ✅ 包配置
 ├── README.md                    # ✅ 文档
 ├── index.html                   # ✅ 入口HTML
@@ -119,7 +119,7 @@ sdkwork-generations-flutter-mobile/
 ├── CLAUDE.md                    # ✅ Claude兼容性垫片
 ├── GEMINI.md                    # ✅ Gemini兼容性垫片
 ├── CODEX.md                     # ✅ Codex兼容性垫片
-├── sdkwork.app.config.json      # ✅ 应用清单
+├── agent.app.config.json      # ✅ 应用清单
 ├── pubspec.yaml                 # ✅ Dart包配置
 ├── README.md                    # ✅ 文档
 ├── config/                      # ✅ 配置模板
@@ -158,7 +158,7 @@ sdkwork-generations-flutter-mobile/
 | `CLAUDE.md` | ✅ | ✅ | ✅ |
 | `GEMINI.md` | ✅ | ✅ | ✅ |
 | `CODEX.md` | ✅ | ✅ | ✅ |
-| `sdkwork.app.config.json` | ✅ | ✅ | ✅ |
+| `agent.app.config.json` | ✅ | ✅ | ✅ |
 | 包配置文件 | ✅ | ✅ | ✅ |
 | 本地规范目录 | ✅ | ✅ | ✅ |
 | 源代码目录 | ✅ | ✅ | ✅ |
@@ -200,7 +200,7 @@ sdkwork-generations-flutter-mobile/
 - 标准工作空间元数据 (`.sdkwork/`)
 - 代理入口文件 (`AGENTS.md`)
 - 工具兼容性垫片 (`CLAUDE.md`, `GEMINI.md`, `CODEX.md`)
-- 应用清单 (`sdkwork.app.config.json`)
+- 应用清单 (`agent.app.config.json`)
 - 包配置文件 (`package.json` 或 `pubspec.yaml`)
 - 标准目录结构 (`src/` 或 `lib/`, `config/`, `specs/`, `tests/` 等)
 - 忽略文件 (`.gitignore`)

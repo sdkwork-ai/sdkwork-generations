@@ -18,13 +18,13 @@ Do not copy root standard text into this application. Use relative links into `.
 
 ## Application Identity
 
-This root is the SDKWork Generations H5 application. Read `sdkwork.app.config.json`, `specs/`, and package-local specs before changing app behavior, runtime config, SDK wiring, release metadata, or app-owned capabilities.
+This root is the SDKWork Generations H5 application. Read `agent.app.config.json`, `specs/`, and package-local specs before changing app behavior, runtime config, SDK wiring, release metadata, or app-owned capabilities.
 
 ## Local Dictionary Structure
 
 - `AGENTS.md`: application-level agent entrypoint.
 - `CLAUDE.md`, `GEMINI.md`, `CODEX.md`: compatibility shims that point to `AGENTS.md`.
-- `sdkwork.app.config.json`: application manifest.
+- `agent.app.config.json`: application manifest.
 - `.sdkwork/`: source-controlled app workspace metadata, skills, and plugins.
 - `src/`: thin bootstrap, providers, route assembly, and mobile shell entry only.
 - `packages/`: app, console, admin, core, commons, shell, capacitor, and host packages.

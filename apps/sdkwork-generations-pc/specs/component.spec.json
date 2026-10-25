@@ -17,7 +17,7 @@
     "generated": false,
     "private": true,
     "manifests": [
-      "sdkwork.app.config.json",
+      "agent.app.config.json",
       "package.json"
     ]
   },
@@ -90,7 +90,7 @@
     ],
     "events": [],
     "configKeys": [
-      "sdkwork.app.config.json"
+      "agent.app.config.json"
     ],
     "routeManifest": null
   },
