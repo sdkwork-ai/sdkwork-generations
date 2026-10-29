@@ -95,8 +95,10 @@ pub(crate) fn generation_payload(
 
 /// Builds the `parameters.referenceImages` entries consumed by the vendor
 /// adapters: URLs become `{url}` entries and asset ids become `{assetId}`
-/// entries (both keys resolve server-side). An empty input yields `None` so
-/// callers only insert the parameter when references exist.
+/// entries. Asset ids are NOT resolved server-side yet — the creation
+/// validation rejects assetId-only entries with guidance to pass URLs — so
+/// callers should prefer URLs. An empty input yields `None` so callers only
+/// insert the parameter when references exist.
 pub(crate) fn reference_image_entries(
     reference_images: &[String],
     reference_asset_ids: &[String],

@@ -120,6 +120,7 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
                     task.status.as_deref().or(task.state.as_deref()),
                     task.images.clone().unwrap_or_default(),
                     task.error.as_ref().map(crate::task_error_message),
+                    task.model.as_deref(),
                 )))
             }
             "vidu" => {
@@ -323,11 +324,27 @@ mod surfaces {
         _selection: &VendorSelection,
         inputs: &GenerationCommandInputs,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+        // Kling's two reference modes are mutually exclusive: a single
+        // reference rides `image` (image-to-image), while multi-reference
+        // models take `image_reference_list`. Mixing both is ambiguous
+        // upstream, and forwarding only the first reference silently dropped
+        // every additional one.
+        let references: Vec<&str> = inputs
+            .reference_images
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect();
         let request = crate::gateway::KlingImageGenerationRequest {
             model_name: (!inputs.model.is_empty()).then(|| inputs.model.clone()),
             prompt: inputs.prompt.clone(),
-            image: inputs.first_reference_image(),
-            image_reference_list: None,
+            image: (references.len() == 1).then(|| references[0].to_string()),
+            image_reference_list: (references.len() > 1).then(|| {
+                references
+                    .iter()
+                    .map(|url| serde_json::json!({ "url": url }))
+                    .collect()
+            }),
             aspect_ratio: inputs.aspect_ratio.clone(),
             callback_url: None,
         };
@@ -428,6 +445,7 @@ mod surfaces {
         status: Option<&str>,
         media: Vec<ProviderGeneratedMedia>,
         error: Option<String>,
+        vendor_model: Option<&str>,
     ) -> GenerationDispatchOutcome {
         match status_from_vendor(status) {
             GenerationStatus::Succeeded => {
@@ -436,11 +454,16 @@ mod surfaces {
                     .filter_map(|entry| entry.url.clone().or_else(|| entry.uri.clone()))
                     .map(|url| image_result(record, &url, None))
                     .collect();
-                finish_outcome(
-                    record,
-                    results,
-                    Some(usage_from_media(vendor, inputs, &media, MediaUsageKind::Image)),
-                )
+                let mut usage =
+                    usage_from_media(vendor, inputs, &media, MediaUsageKind::Image);
+                // The refresh path carries default inputs, so the
+                // vendor-reported model is the only metering model source.
+                if let Some(model) =
+                    vendor_model.map(str::trim).filter(|model| !model.is_empty())
+                {
+                    usage.model = Some(model.to_string());
+                }
+                finish_outcome(record, results, Some(usage))
             }
             GenerationStatus::Failed => failed_outcome(
                 record,
@@ -468,11 +491,25 @@ fn image_result_from_openai(
     record: &GenerationRecord,
     image: &cloudrouter_open_sdk::models::OpenAiImage,
 ) -> GenerationResult {
-    image_result(
-        record,
-        image.url.as_deref().unwrap_or_default(),
-        image.mime_type.as_deref(),
-    )
+    // gpt-image models answer base64-only (no hosted `url`); surface the
+    // payload as a data URI so the result keeps a renderable locator instead
+    // of an empty one.
+    let url = image
+        .url
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| openai_b64_data_uri(image));
+    image_result(record, url.as_deref().unwrap_or_default(), image.mime_type.as_deref())
+}
+
+fn openai_b64_data_uri(image: &cloudrouter_open_sdk::models::OpenAiImage) -> Option<String> {
+    let payload = image.b64_json.as_deref()?.trim();
+    (!payload.is_empty()).then(|| {
+        format!(
+            "data:{};base64,{payload}",
+            image.mime_type.as_deref().unwrap_or("image/png")
+        )
+    })
 }
 
 fn image_result(
@@ -523,3 +560,449 @@ fn vendor_from_record(record: &GenerationRecord) -> String {
         .clone()
         .unwrap_or_else(|| "openai".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cloudrouter_open_sdk::models::OpenAiImage;
+    use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
+    use sdkwork_intelligence_generations_service::domain::models::{
+        CreateGenerationCommandRequest, GenerationModality, GenerationStatus,
+    };
+    use sdkwork_intelligence_generations_service::ports::GenerationProvider;
+
+    use crate::gateway::test_support::ScriptedGateway;
+    use crate::image::ImageGenerationProviderAdapter;
+
+    fn sample_record(
+        operation_type: &str,
+    ) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+        sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+            id: "gen-1".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            organization_id: None,
+            user_id: "user-1".to_string(),
+            modality: GenerationModality::Image,
+            operation_type: operation_type.to_string(),
+            source_provider: Some("openai".to_string()),
+            source_job_id: None,
+            prompt_preview: Some("gen".to_string()),
+            status: GenerationStatus::Queued,
+            favorite: false,
+            result_count: 0,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn command(
+        model: &str,
+        parameters: Option<serde_json::Value>,
+    ) -> CreateGenerationCommandRequest {
+        CreateGenerationCommandRequest {
+            tenant_id: "tenant-1".to_string(),
+            organization_id: None,
+            prompt: "a precise router diagram".to_string(),
+            model: Some(model.to_string()),
+            input_asset_ids: None,
+            parameters,
+        }
+    }
+
+    fn context() -> GenerationsRequestContext {
+        GenerationsRequestContext::from_parts(
+            "tenant-1".to_string(),
+            "user-1".to_string(),
+            "trace-1".to_string(),
+        )
+    }
+
+    fn reference_parameters(entries: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "vendor": "openai",
+            "referenceImages": entries,
+            "generationConfig": {
+                "aspectRatio": "1:1",
+                "imageCount": 2,
+                "size": "1024x1024",
+                "quality": "high",
+                "responseFormat": "url"
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn openai_text_to_image_forwards_size_quality_count_and_format() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.openai_image_generation.lock().unwrap() = Some(cloudrouter_open_sdk::models::OpenAiImageList {
+            created: 0,
+            data: vec![OpenAiImage {
+                url: Some("https://cdn.example/out.png".to_string()),
+                ..OpenAiImage::default()
+            }],
+            usage: None,
+        });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("openai/gpt-image-2", Some(reference_parameters(serde_json::json!([])))),
+                &context(),
+            )
+            .await
+            .expect("openai dispatch succeeds");
+
+        let request = gateway
+            .last_openai_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("openai request captured");
+        assert_eq!(request.model, "gpt-image-2", "the vendor prefix is stripped");
+        assert_eq!(request.n, Some(2));
+        assert_eq!(request.size.as_deref(), Some("1024x1024"));
+        assert_eq!(request.quality.as_deref(), Some("high"));
+        assert_eq!(request.response_format.as_deref(), Some("url"));
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(
+            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            Some("https://cdn.example/out.png")
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_b64_only_response_becomes_a_data_uri() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.openai_image_generation.lock().unwrap() = Some(cloudrouter_open_sdk::models::OpenAiImageList {
+            created: 0,
+            data: vec![OpenAiImage {
+                b64_json: Some("aW1hZ2VieXRlcw==".to_string()),
+                ..OpenAiImage::default()
+            }],
+            usage: None,
+        });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("openai/gpt-image-2", None),
+                &context(),
+            )
+            .await
+            .expect("openai dispatch succeeds");
+
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
+        assert_eq!(
+            snapshot.url.as_deref(),
+            Some("data:image/png;base64,aW1hZ2VieXRlcw=="),
+            "base64-only gpt-image output stays renderable"
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_image_edit_forwards_the_reference_url() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.openai_image_edit_list.lock().unwrap() = Some(cloudrouter_open_sdk::models::OpenAiImageList {
+            created: 0,
+            data: vec![OpenAiImage {
+                url: Some("https://cdn.example/edited.png".to_string()),
+                ..OpenAiImage::default()
+            }],
+            usage: None,
+        });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        provider
+            .dispatch(
+                &sample_record("image_edit"),
+                &command(
+                    "openai/gpt-image-2",
+                    Some(reference_parameters(serde_json::json!([
+                        { "url": "https://cdn.example/ref.png" }
+                    ]))),
+                ),
+                &context(),
+            )
+            .await
+            .expect("openai edit dispatch succeeds");
+
+        let request = gateway
+            .last_openai_image_edit_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("openai edit request captured");
+        assert_eq!(request.prompt, "a precise router diagram");
+        let reference = request.image.expect("reference rides the edit request");
+        assert_eq!(
+            reference
+                .additional_properties
+                .get("url")
+                .and_then(serde_json::Value::as_str),
+            Some("https://cdn.example/ref.png")
+        );
+    }
+
+    #[tokio::test]
+    async fn kling_single_reference_rides_the_image_field() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.kling_image_create_task.lock().unwrap() =
+            Some(crate::gateway::ProviderImageGenerationTask {
+                task_id: Some("kling-task-1".to_string()),
+                ..crate::gateway::ProviderImageGenerationTask::default()
+            });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut parameters = reference_parameters(serde_json::json!([
+            { "url": "https://cdn.example/ref.png" }
+        ]));
+        parameters["vendor"] = serde_json::json!("kling");
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("kling/kling-v2-6", Some(parameters)),
+                &context(),
+            )
+            .await
+            .expect("kling dispatch succeeds");
+
+        let request = gateway
+            .last_kling_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("kling request captured");
+        assert_eq!(request.model_name.as_deref(), Some("kling-v2-6"));
+        assert_eq!(request.image.as_deref(), Some("https://cdn.example/ref.png"));
+        assert!(request.image_reference_list.is_none(), "single reference stays on image");
+        assert_eq!(request.aspect_ratio.as_deref(), Some("1:1"));
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(outcome.record.source_job_id.as_deref(), Some("kling-task-1"));
+        assert_eq!(outcome.record.source_provider.as_deref(), Some("kling"));
+    }
+
+    #[tokio::test]
+    async fn kling_multi_reference_forwards_the_full_reference_list() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.kling_image_create_task.lock().unwrap() =
+            Some(crate::gateway::ProviderImageGenerationTask {
+                task_id: Some("kling-task-2".to_string()),
+                ..crate::gateway::ProviderImageGenerationTask::default()
+            });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut parameters = reference_parameters(serde_json::json!([
+            { "url": "https://cdn.example/ref-1.png" },
+            { "url": "https://cdn.example/ref-2.png" },
+            { "url": "https://cdn.example/ref-3.png" }
+        ]));
+        parameters["vendor"] = serde_json::json!("kling");
+        provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("kling/kling-v2-master", Some(parameters)),
+                &context(),
+            )
+            .await
+            .expect("kling dispatch succeeds");
+
+        let request = gateway
+            .last_kling_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("kling request captured");
+        assert!(
+            request.image.is_none(),
+            "multi-reference does not set the single image field"
+        );
+        let list = request
+            .image_reference_list
+            .expect("multi-reference list is forwarded");
+        assert_eq!(list.len(), 3, "every reference is forwarded");
+        assert_eq!(
+            list[0].get("url").and_then(serde_json::Value::as_str),
+            Some("https://cdn.example/ref-1.png")
+        );
+    }
+
+    #[tokio::test]
+    async fn kling_retrieve_collects_succeeded_images() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.kling_image_retrieve_task.lock().unwrap() =
+            Some(crate::gateway::ProviderImageGenerationTask {
+                task_id: Some("kling-task-1".to_string()),
+                status: Some("succeed".to_string()),
+                model: Some("kling-image-v2".to_string()),
+                images: Some(vec![cloudrouter_open_sdk::models::ProviderGeneratedMedia {
+                    url: Some("https://cdn.example/kling.png".to_string()),
+                    ..cloudrouter_open_sdk::models::ProviderGeneratedMedia::default()
+                }]),
+                ..crate::gateway::ProviderImageGenerationTask::default()
+            });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut record = sample_record("text_to_image");
+        record.source_provider = Some("kling".to_string());
+        record.source_job_id = Some("kling-task-1".to_string());
+        let outcome = provider
+            .retrieve(&record, &context())
+            .await
+            .expect("kling retrieve succeeds")
+            .expect("kling retrieve produces an outcome");
+
+        assert_eq!(
+            gateway.last_kling_image_retrieve_task_id.lock().unwrap().as_deref(),
+            Some("kling-task-1")
+        );
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(
+            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            Some("https://cdn.example/kling.png")
+        );
+        // The refresh path holds no original command, so the vendor-reported
+        // model is the metering model.
+        let usage = outcome.usage.expect("usage is reported");
+        assert_eq!(usage.model.as_deref(), Some("kling-image-v2"));
+        assert_eq!(usage.image_count, 1);
+    }
+
+    #[tokio::test]
+    async fn vidu_reference_to_image_forwards_every_reference_and_pends() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.vidu_image_task.lock().unwrap() =
+            Some(serde_json::from_str(r#"{"task_id": "vidu-task-1"}"#).expect("vidu task fixture"));
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut parameters = reference_parameters(serde_json::json!([
+            { "url": "https://cdn.example/ref-1.png" },
+            { "url": "https://cdn.example/ref-2.png" }
+        ]));
+        parameters["vendor"] = serde_json::json!("vidu");
+        parameters["seed"] = serde_json::json!(42);
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("vidu/viduq1-reference2image", Some(parameters)),
+                &context(),
+            )
+            .await
+            .expect("vidu dispatch succeeds");
+
+        let request = gateway
+            .last_vidu_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("vidu request captured");
+        assert_eq!(request.model, "viduq1-reference2image");
+        assert_eq!(
+            request.images,
+            vec![
+                "https://cdn.example/ref-1.png".to_string(),
+                "https://cdn.example/ref-2.png".to_string()
+            ]
+        );
+        assert_eq!(request.aspect_ratio.as_deref(), Some("1:1"));
+        assert_eq!(request.seed, Some(42));
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(outcome.record.source_job_id.as_deref(), Some("vidu-task-1"));
+    }
+
+    #[tokio::test]
+    async fn volcengine_forwards_size_seed_references_and_counts_usage() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.volcengine_image_response.lock().unwrap() = Some(
+            serde_json::from_str(
+                r#"{
+                    "data": [ { "url": "https://cdn.example/seedream.png" } ],
+                    "usage": { "generated_images": 1, "total_tokens": 1200 }
+                }"#,
+            )
+            .expect("volcengine response fixture"),
+        );
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut parameters = reference_parameters(serde_json::json!([
+            { "url": "https://cdn.example/ref.png" }
+        ]));
+        parameters["vendor"] = serde_json::json!("jimeng");
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("jimeng/doubao-seedream-4-0-250828", Some(parameters)),
+                &context(),
+            )
+            .await
+            .expect("volcengine dispatch succeeds");
+
+        let request = gateway
+            .last_volcengine_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("volcengine request captured");
+        assert_eq!(request.model, "doubao-seedream-4-0-250828");
+        assert_eq!(
+            request.image,
+            Some(vec!["https://cdn.example/ref.png".to_string()])
+        );
+        assert_eq!(request.size.as_deref(), Some("1024x1024"));
+        assert_eq!(request.response_format.as_deref(), Some("url"));
+        assert_eq!(request.seed, None, "no seed supplied by the fixture");
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(
+            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            Some("https://cdn.example/seedream.png")
+        );
+        let usage = outcome.usage.expect("volcengine usage is reported");
+        assert_eq!(usage.image_count, 1);
+        assert_eq!(usage.input_tokens, 1200);
+    }
+
+    #[tokio::test]
+    async fn nano_banana_forwards_sample_count_and_aspect_ratio() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.gemini_image_generation.lock().unwrap() =
+            Some(crate::gateway::GeminiImageGenerationResponse {
+                predictions: vec![crate::gateway::GeminiImagePrediction {
+                    url: Some("https://cdn.example/gemini.png".to_string()),
+                    ..crate::gateway::GeminiImagePrediction::default()
+                }],
+                error: None,
+            });
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut parameters = reference_parameters(serde_json::json!([]));
+        parameters["vendor"] = serde_json::json!("google");
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("google/gemini-2.5-flash-image", Some(parameters)),
+                &context(),
+            )
+            .await
+            .expect("gemini dispatch succeeds");
+
+        let (model, request) = gateway
+            .last_gemini_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("gemini request captured");
+        assert_eq!(model, "gemini-2.5-flash-image");
+        let parameters = request.parameters.expect("gemini parameters forwarded");
+        assert_eq!(parameters.sample_count, Some(2));
+        assert_eq!(parameters.aspect_ratio.as_deref(), Some("1:1"));
+        assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
+        assert_eq!(
+            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            Some("https://cdn.example/gemini.png")
+        );
+    }
+}
+

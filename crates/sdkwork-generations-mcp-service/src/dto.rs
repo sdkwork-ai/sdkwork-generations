@@ -35,8 +35,8 @@ pub struct GenerateImageInput {
     #[serde(default)]
     pub reference_images: Vec<String>,
     /// Asset ids of saved assets to reference (turns the command into an
-    /// image edit). Use these instead of URLs when the source material lives
-    /// in the assets catalog.
+    /// image edit). NOT resolved server-side yet: assetId-only references
+    /// fail creation validation with guidance to pass URLs instead.
     #[serde(default)]
     pub reference_asset_ids: Vec<String>,
 }
@@ -78,8 +78,8 @@ pub struct GenerateVideoInput {
     #[serde(default)]
     pub reference_images: Vec<String>,
     /// Asset ids of saved assets to reference (first frame for
-    /// image-to-video). Use these instead of URLs when the source material
-    /// lives in the assets catalog.
+    /// image-to-video). NOT resolved server-side yet: assetId-only
+    /// references fail creation validation with guidance to pass URLs.
     #[serde(default)]
     pub reference_asset_ids: Vec<String>,
     /// Tail frame image URL for start-end to video vendors.

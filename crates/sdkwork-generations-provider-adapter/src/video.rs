@@ -160,6 +160,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     task.status.as_deref().or(task.state.as_deref()),
                     task.videos.clone().unwrap_or_default(),
                     task.error.as_ref().map(crate::task_error_message),
+                    task.model.as_deref(),
                 )))
             }
             "vidu" => {
@@ -199,6 +200,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     task.status.as_deref().or(task.state.as_deref()),
                     media,
                     task.error.as_ref().map(crate::task_error_message),
+                    task.model.as_deref(),
                 )))
             }
             _ => Ok(None),
@@ -636,25 +638,28 @@ async fn dispatch_volcengine(
     record: &GenerationRecord,
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
-    let mut content = vec![VolcengineContentPart {
+    // Seedance's `content` array carries every reference image as its own
+    // `image_url` part ahead of the prompt text; forwarding only the first
+    // reference silently dropped the rest.
+    let mut content: Vec<VolcengineContentPart> = inputs
+        .reference_images
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .map(|reference| VolcengineContentPart {
+            file_id: None,
+            image_url: Some(reference.clone()),
+            text: None,
+            video_url: None,
+            r#type: "image_url".to_string(),
+        })
+        .collect();
+    content.push(VolcengineContentPart {
         file_id: None,
         image_url: None,
         text: Some(inputs.prompt.clone()),
         video_url: None,
         r#type: "text".to_string(),
-    }];
-    if let Some(reference) = inputs.first_reference_image() {
-        content.insert(
-            0,
-            VolcengineContentPart {
-                file_id: None,
-                image_url: Some(reference),
-                text: None,
-                video_url: None,
-                r#type: "image_url".to_string(),
-            },
-        );
-    }
+    });
     let request = VolcengineContentGenerationTaskCreateRequest {
         callback_url: None,
         content,
@@ -718,6 +723,7 @@ fn outcome_from_media_task(
     status: Option<&str>,
     media: Vec<ProviderGeneratedMedia>,
     error: Option<String>,
+    vendor_model: Option<&str>,
 ) -> GenerationDispatchOutcome {
     match status_from_vendor(status) {
         GenerationStatus::Succeeded => {
@@ -726,7 +732,12 @@ fn outcome_from_media_task(
                 .filter_map(|entry| entry.url.clone().or_else(|| entry.uri.clone()))
                 .map(|url| video_result(record, &url))
                 .collect();
-            let usage = usage_from_media(vendor, &GenerationCommandInputs::default(), &media, MediaUsageKind::Video);
+            let mut usage = usage_from_media(vendor, &GenerationCommandInputs::default(), &media, MediaUsageKind::Video);
+            // The refresh path no longer holds the original command, so the
+            // vendor-reported model is the only metering model source here.
+            if let Some(model) = vendor_model.map(str::trim).filter(|model| !model.is_empty()) {
+                usage.model = Some(model.to_string());
+            }
             succeeded_outcome(record, results, Some(usage), Vec::new())
         }
         GenerationStatus::Failed => {
@@ -841,6 +852,7 @@ mod video_lifecycle_tests {
 
     use cloudrouter_open_sdk::models::{
         KlingVideoGenerationTask, OpenAiVideo, ProviderGeneratedMedia, ViduVideoGenerationTask,
+        VolcengineContentGenerationTaskCreateResponse,
     };
     use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
     use sdkwork_intelligence_generations_service::domain::models::{
@@ -1307,5 +1319,92 @@ mod video_lifecycle_tests {
             outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
             Some("https://cdn.example/sora-final.mp4")
         );
+    }
+
+    #[test]
+    fn veo_parameters_serialize_camel_case_wire_names() {
+        // The Gemini native face reads `aspectRatio` / `personGeneration` /
+        // `durationSeconds`; snake_case keys are silently ignored upstream,
+        // which used to drop the requested aspect ratio.
+        let request = crate::gateway::GeminiVideoGenerationRequest {
+            instances: vec![crate::gateway::GeminiVideoInstance {
+                prompt: "a drone shot".to_string(),
+                image: None,
+            }],
+            parameters: Some(crate::gateway::GeminiVideoParameters {
+                aspect_ratio: Some("9:16".to_string()),
+                duration_seconds: Some(8),
+                person_generation: Some("allow_adult".to_string()),
+            }),
+        };
+        let payload = serde_json::to_value(&request).expect("request serializes");
+        let parameters = payload
+            .get("parameters")
+            .and_then(serde_json::Value::as_object)
+            .expect("parameters object");
+        assert!(parameters.contains_key("aspectRatio"));
+        assert!(parameters.contains_key("personGeneration"));
+        assert!(parameters.contains_key("durationSeconds"));
+        assert!(
+            !parameters.contains_key("aspect_ratio"),
+            "snake_case keys must not reach the wire"
+        );
+    }
+
+    #[tokio::test]
+    async fn volcengine_forwards_every_reference_image_as_a_content_part() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.volcengine_video_task.lock().unwrap() =
+            Some(VolcengineContentGenerationTaskCreateResponse {
+                task_id: Some("seedance-task-1".to_string()),
+                ..VolcengineContentGenerationTaskCreateResponse::default()
+            });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("volcengine/doubao-seedance-1-0-lite-i2v-250428");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "volcengine",
+            "referenceImages": [
+                { "url": "https://cdn.example/ref-1.png" },
+                { "url": "https://cdn.example/ref-2.png" }
+            ]
+        }));
+        let outcome = provider
+            .dispatch(
+                &sample_record("image_to_video"),
+                &command,
+                &context(),
+            )
+            .await
+            .expect("seedance dispatch succeeds");
+
+        let request = gateway
+            .last_volcengine_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("seedance request captured");
+        let image_parts: Vec<&str> = request
+            .content
+            .iter()
+            .filter(|part| part.r#type == "image_url")
+            .filter_map(|part| part.image_url.as_deref())
+            .collect();
+        assert_eq!(
+            image_parts,
+            vec![
+                "https://cdn.example/ref-1.png",
+                "https://cdn.example/ref-2.png"
+            ],
+            "every reference image becomes a content part"
+        );
+        let text_parts = request
+            .content
+            .iter()
+            .filter(|part| part.r#type == "text")
+            .count();
+        assert_eq!(text_parts, 1, "the prompt rides exactly one text part");
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
+        assert_eq!(outcome.record.source_job_id.as_deref(), Some("seedance-task-1"));
     }
 }

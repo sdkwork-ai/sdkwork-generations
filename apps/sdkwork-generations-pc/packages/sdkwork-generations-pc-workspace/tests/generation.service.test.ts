@@ -467,7 +467,7 @@ describe("sdkwork-generations-pc-workspace service", () => {
         {
           prompt: "Create media",
         },
-        undefined,
+        {},
       );
     },
   );

@@ -762,27 +762,45 @@ fn validate_creation_parameters(
         .and_then(Value::as_object);
     let invalid = |what: &str| GenerationsError::InvalidInput(what.to_string());
 
-    if let Some(count) = config
-        .and_then(|config| config.get("imageCount"))
-        .and_then(Value::as_i64)
-    {
-        if !(1..=20).contains(&count) {
-            return Err(invalid("generationConfig.imageCount must be between 1 and 20"));
+    // Both sources are probed in the same order the vendor adapters extract
+    // with (`parameters` first, then `generationConfig`), so relocating a
+    // value between the two layers cannot bypass the bounds below.
+    let number_from = |keys: &[&str]| -> Option<f64> {
+        let sources: [Option<&serde_json::Map<String, Value>>; 2] = [Some(params), config];
+        for source in sources.into_iter().flatten() {
+            for key in keys {
+                if let Some(value) = source.get(*key).and_then(Value::as_f64) {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    };
+    let string_from = |keys: &[&str]| -> Option<&str> {
+        let sources: [Option<&serde_json::Map<String, Value>>; 2] = [Some(params), config];
+        for source in sources.into_iter().flatten() {
+            for key in keys {
+                if let Some(value) = source.get(*key).and_then(Value::as_str) {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    };
+
+    if let Some(count) = number_from(&["imageCount", "image_count", "n"]) {
+        if count.fract() != 0.0 || !(1.0..=20.0).contains(&count) {
+            return Err(invalid("imageCount must be an integer between 1 and 20"));
         }
     }
-    if let Some(duration) = config
-        .and_then(|config| config.get("durationSeconds"))
-        .and_then(Value::as_f64)
-    {
+    if let Some(duration) = number_from(&["durationSeconds", "duration_seconds", "duration"]) {
         if !(0.0..=3600.0).contains(&duration) || duration == 0.0 {
             return Err(invalid(
-                "generationConfig.durationSeconds must be greater than 0 and at most 3600",
+                "durationSeconds must be greater than 0 and at most 3600",
             ));
         }
     }
-    if let Some(size) = params
-        .get("size")
-        .and_then(Value::as_str)
+    if let Some(size) = string_from(&["size", "imageSize"])
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
@@ -797,10 +815,7 @@ fn validate_creation_parameters(
             return Err(invalid("size must look like `1024x1024` with sides between 1 and 8192"));
         }
     }
-    if let Some(ratio) = config
-        .and_then(|config| config.get("aspectRatio"))
-        .and_then(Value::as_str)
-    {
+    if let Some(ratio) = string_from(&["aspectRatio", "aspect_ratio"]) {
         let ok = {
             let parts: Vec<&str> = ratio.split(':').collect();
             parts.len() == 2
@@ -810,21 +825,48 @@ fn validate_creation_parameters(
         };
         if !ok {
             return Err(invalid(
-                "generationConfig.aspectRatio must look like `16:9` (positive integers)",
+                "aspectRatio must look like `16:9` (positive integers)",
             ));
         }
     }
-    let number_from = |keys: &[&str]| -> Option<f64> {
-        let sources: [Option<&serde_json::Map<String, Value>>; 2] = [Some(params), config];
-        for source in sources.into_iter().flatten() {
-            for key in keys {
-                if let Some(value) = source.get(*key).and_then(Value::as_f64) {
-                    return Some(value);
-                }
+    // Reference entries must carry a locator the vendor can actually fetch:
+    // the adapters forward the resolved string verbatim as the upstream URL,
+    // and an assetId-only entry would reach the vendor as an unfetchable bare
+    // id. Server-side asset resolution does not exist yet, so refuse honestly
+    // here (before the record is created) instead of at the provider.
+    for (list_key, label, locator_keys) in [
+        ("referenceImages", "reference image", ["url", "publicUrl"]),
+        ("reference_images", "reference image", ["url", "publicUrl"]),
+        ("referenceAssets", "reference asset", ["url", "publicUrl"]),
+        ("reference_assets", "reference asset", ["url", "publicUrl"]),
+        ("referenceVideos", "reference video", ["url", "videoUrl"]),
+        ("reference_videos", "reference video", ["url", "videoUrl"]),
+    ] {
+        let Some(entries) = params.get(list_key).and_then(Value::as_array) else {
+            continue;
+        };
+        for entry in entries {
+            let usable = entry.as_object().is_some_and(|record| {
+                locator_keys.iter().any(|key| {
+                    record
+                        .get(*key)
+                        .and_then(Value::as_str)
+                        .map(|value| {
+                            // `drive://` references are private to the drive
+                            // app; no vendor can fetch them and no server-side
+                            // resolution exists to translate one.
+                            !value.trim().is_empty() && !value.trim().starts_with("drive://")
+                        })
+                        .unwrap_or(false)
+                })
+            });
+            if !usable {
+                return Err(invalid(&format!(
+                    "{label} references must carry a fetchable url; asset ids are not resolved server-side yet"
+                )));
             }
         }
-        None
-    };
+    }
     if let Some(speed) = number_from(&["speed"]) {
         if !(0.1..=10.0).contains(&speed) {
             return Err(invalid("speed must be between 0.1 and 10"));
@@ -881,10 +923,55 @@ mod validation_tests {
     }
 
     #[test]
+    fn misplaced_out_of_bounds_values_fail_in_either_source() {
+        // The vendor adapters extract counts, sizes, ratios, and durations
+        // from both the top-level parameters and the nested generationConfig;
+        // the bounds must hold wherever the caller places the value.
+        assert!(validate(json!({ "imageCount": 500 })).is_err());
+        assert!(validate(json!({ "n": 500 })).is_err());
+        assert!(validate(json!({ "durationSeconds": -60 })).is_err());
+        assert!(validate(json!({ "aspectRatio": "not-a-ratio" })).is_err());
+        assert!(validate(json!({ "generationConfig": { "size": "999999x1" } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "size": "0x0" } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "aspectRatio": "16..9" } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "imageCount": 2.5 } })).is_err());
+        assert!(validate(json!({ "generationConfig": { "size": "1024x1024" } })).is_ok());
+    }
+
+    #[test]
     fn out_of_range_multipliers_fail() {
         assert!(validate(json!({ "speed": 100 })).is_err());
         assert!(validate(json!({ "seed": -1 })).is_err());
         assert!(validate(json!({ "cfgScale": 99 })).is_err());
+    }
+
+    #[test]
+    fn reference_entries_without_a_fetchable_url_fail() {
+        // The adapters forward the resolved locator verbatim as the upstream
+        // URL, so an assetId-only entry or a private drive:// reference would
+        // reach the vendor unfetchable. Both must fail locally.
+        assert!(validate(json!({
+            "referenceImages": [{ "assetId": "asset.1" }]
+        })).is_err());
+        assert!(validate(json!({
+            "referenceImages": [{ "url": "drive://spaces/s1/nodes/n1" }]
+        })).is_err());
+        assert!(validate(json!({
+            "referenceVideos": [{ "videoUrl": "" }]
+        })).is_err());
+        assert!(validate(json!({
+            "referenceImages": ["https://cdn.example/ref.png"]
+        })).is_err(), "plain-string entries are not object locators either");
+
+        assert!(validate(json!({
+            "referenceImages": [{ "url": "https://cdn.example/ref.png", "assetId": "asset.1" }]
+        })).is_ok());
+        assert!(validate(json!({
+            "referenceVideos": [{ "videoUrl": "https://cdn.example/drive.mp4" }]
+        })).is_ok());
+        assert!(validate(json!({
+            "referenceImages": [{ "publicUrl": "https://cdn.example/ref.png" }]
+        })).is_ok());
     }
 }
 

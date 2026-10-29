@@ -775,11 +775,11 @@ pub struct GeminiVideoInstance {
 /// Tuning parameters for a Veo generation request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeminiVideoParameters {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "aspectRatio")]
     pub aspect_ratio: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "durationSeconds")]
     pub duration_seconds: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "personGeneration")]
     pub person_generation: Option<String>,
 }
 
@@ -1021,6 +1021,10 @@ pub struct ProviderImageGenerationTask {
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Vendor-reported model for the finished task; the refresh path uses it
+    /// as the metering model because the original command is not reloaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1119,6 +1123,20 @@ pub mod test_support {
         pub kling_video_retrieve_task: Mutex<Option<KlingVideoGenerationTask>>,
         pub openai_video_create: Mutex<Option<OpenAiVideo>>,
         pub openai_video_retrieve: Mutex<Option<OpenAiVideo>>,
+        pub openai_image_edit_list: Mutex<Option<OpenAiImageList>>,
+        pub last_openai_image_edit_request: Mutex<Option<OpenAiImageEditRequest>>,
+        pub kling_image_create_task: Mutex<Option<ProviderImageGenerationTask>>,
+        pub last_kling_image_request: Mutex<Option<KlingImageGenerationRequest>>,
+        pub kling_image_retrieve_task: Mutex<Option<ProviderImageGenerationTask>>,
+        pub last_kling_image_retrieve_task_id: Mutex<Option<String>>,
+        pub vidu_image_task: Mutex<Option<ViduImageGenerationTask>>,
+        pub last_vidu_image_request: Mutex<Option<ViduReferenceToImageRequest>>,
+        pub vidu_image_creations: Mutex<Option<ViduTaskCreationsResponse>>,
+        pub last_vidu_image_retrieve_task_id: Mutex<Option<String>>,
+        pub volcengine_image_response: Mutex<Option<VolcengineImageGenerationResponse>>,
+        pub last_volcengine_image_request: Mutex<Option<VolcengineImageGenerationRequest>>,
+        pub volcengine_video_task: Mutex<Option<VolcengineContentGenerationTaskCreateResponse>>,
+        pub last_volcengine_video_request: Mutex<Option<VolcengineContentGenerationTaskCreateRequest>>,
     }
 
     impl Default for ScriptedGateway {
@@ -1154,6 +1172,20 @@ pub mod test_support {
                 kling_video_retrieve_task: Mutex::new(None),
                 openai_video_create: Mutex::new(None),
                 openai_video_retrieve: Mutex::new(None),
+                openai_image_edit_list: Mutex::new(None),
+                last_openai_image_edit_request: Mutex::new(None),
+                kling_image_create_task: Mutex::new(None),
+                last_kling_image_request: Mutex::new(None),
+                kling_image_retrieve_task: Mutex::new(None),
+                last_kling_image_retrieve_task_id: Mutex::new(None),
+                vidu_image_task: Mutex::new(None),
+                last_vidu_image_request: Mutex::new(None),
+                vidu_image_creations: Mutex::new(None),
+                last_vidu_image_retrieve_task_id: Mutex::new(None),
+                volcengine_image_response: Mutex::new(None),
+                last_volcengine_image_request: Mutex::new(None),
+                volcengine_video_task: Mutex::new(None),
+                last_volcengine_video_request: Mutex::new(None),
             }
         }
     }
@@ -1431,6 +1463,111 @@ pub mod test_support {
                 .ok_or_else(|| SdkworkError::HttpStatus {
                     status: 599,
                     body: "no scripted openai video retrieve response".to_string(),
+                })
+        }
+
+        async fn openai_create_image_edit(
+            &self,
+            body: &OpenAiImageEditRequest,
+        ) -> Result<OpenAiImageList, SdkworkError> {
+            *self.last_openai_image_edit_request.lock().unwrap() = Some(body.clone());
+            self.openai_image_edit_list
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted openai image edit response".to_string(),
+                })
+        }
+
+        async fn kling_create_image_generation(
+            &self,
+            body: &KlingImageGenerationRequest,
+        ) -> Result<ProviderImageGenerationTask, SdkworkError> {
+            *self.last_kling_image_request.lock().unwrap() = Some(body.clone());
+            self.kling_image_create_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted kling image create response".to_string(),
+                })
+        }
+
+        async fn kling_retrieve_image_generation(
+            &self,
+            task_id: &str,
+        ) -> Result<ProviderImageGenerationTask, SdkworkError> {
+            *self.last_kling_image_retrieve_task_id.lock().unwrap() = Some(task_id.to_string());
+            self.kling_image_retrieve_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted kling image retrieve response".to_string(),
+                })
+        }
+
+        async fn vidu_create_reference_to_image(
+            &self,
+            body: &ViduReferenceToImageRequest,
+        ) -> Result<ViduImageGenerationTask, SdkworkError> {
+            *self.last_vidu_image_request.lock().unwrap() = Some(body.clone());
+            self.vidu_image_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu image create response".to_string(),
+                })
+        }
+
+        async fn vidu_retrieve_image_creations(
+            &self,
+            task_id: &str,
+        ) -> Result<ViduTaskCreationsResponse, SdkworkError> {
+            *self.last_vidu_image_retrieve_task_id.lock().unwrap() = Some(task_id.to_string());
+            self.vidu_image_creations
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu image creations response".to_string(),
+                })
+        }
+
+        async fn volcengine_create_image_generation(
+            &self,
+            body: &VolcengineImageGenerationRequest,
+        ) -> Result<VolcengineImageGenerationResponse, SdkworkError> {
+            *self.last_volcengine_image_request.lock().unwrap() = Some(body.clone());
+            self.volcengine_image_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted volcengine image response".to_string(),
+                })
+        }
+
+        async fn volcengine_create_video_task(
+            &self,
+            body: &VolcengineContentGenerationTaskCreateRequest,
+        ) -> Result<VolcengineContentGenerationTaskCreateResponse, SdkworkError> {
+            *self.last_volcengine_video_request.lock().unwrap() = Some(body.clone());
+            self.volcengine_video_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted volcengine video response".to_string(),
                 })
         }
     }
