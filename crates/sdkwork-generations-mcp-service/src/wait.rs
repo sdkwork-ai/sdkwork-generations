@@ -134,6 +134,7 @@ mod tests {
             ) -> Result<GenerationRecord, GenerationsError> {
                 let read = self.reads.fetch_add(1, Ordering::SeqCst);
                 Ok(GenerationRecord {
+                    conversation_id: None,
                     id: "generation.1".to_string(),
                     tenant_id: "0".to_string(),
                     organization_id: None,

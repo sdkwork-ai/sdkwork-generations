@@ -5,6 +5,10 @@
 pub struct GenerationsHttpRequestContext {
     /// Authenticated tenant id.
     pub tenant_id: String,
+    /// Authenticated organization id, when the principal carries a team
+    /// scope. Personal scopes leave this `None`; pricing resolution treats
+    /// the absent organization as the tenant's personal (0) scope.
+    pub organization_id: Option<String>,
     /// Authenticated user id.
     pub user_id: String,
     /// Request correlation id.
@@ -26,11 +30,22 @@ impl GenerationsRequestContext {
         Self { http }
     }
 
-    /// Construct from individual fields.
+    /// Construct from individual fields (personal scope, no organization).
     pub fn from_parts(tenant_id: String, user_id: String, trace_id: String) -> Self {
+        Self::from_parts_with_organization(tenant_id, None, user_id, trace_id)
+    }
+
+    /// Construct with an explicit organization scope.
+    pub fn from_parts_with_organization(
+        tenant_id: String,
+        organization_id: Option<String>,
+        user_id: String,
+        trace_id: String,
+    ) -> Self {
         Self {
             http: GenerationsHttpRequestContext {
                 tenant_id,
+                organization_id,
                 user_id,
                 trace_id,
             },

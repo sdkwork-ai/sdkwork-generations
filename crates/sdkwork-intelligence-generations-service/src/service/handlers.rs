@@ -1,6 +1,6 @@
 //! HTTP handlers for the generations service.
 //!
-//! Implements all 19 endpoints exposed under `/app/v3/api/generations`.
+//! Implements all 20 endpoints exposed under `/app/v3/api/generations`.
 
 use axum::extract::{Extension, Path, Query, State};
 use serde_json::Value;
@@ -10,6 +10,7 @@ use crate::domain::models::{
     CreateGenerationCommandRequest, FavoriteGenerationRequest, GenerationActionRequest,
     SaveGenerationResultToAssetsRequest,
 };
+use crate::domain::pricing::GenerationPricingEstimateRequest;
 use crate::error::GenerationsError;
 use crate::ports::{ListResultsParams, ListTimelineParams};
 use crate::service::generations_service::{GenerationsService, GenerationsServiceState};
@@ -116,6 +117,11 @@ pub fn build_app_routes() -> axum::Router<GenerationsServiceState> {
             "/app/v3/api/generations/{generationId}/results/{resultId}/save_to_assets",
             axum::routing::post(save_to_assets),
         )
+        // Pricing estimate (implementation injected by the composition host)
+        .route(
+            "/app/v3/api/generations/pricing/estimate",
+            axum::routing::post(estimate_generation_pricing),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +167,8 @@ pub struct ListGenerationsQuery {
     #[serde(rename = "operation_type")]
     pub operation_type: Option<String>,
     pub q: Option<String>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -196,12 +204,31 @@ async fn list_generations(
         modality: query.modality,
         operation_type: query.operation_type,
         q: query.q,
+        conversation_id: query.conversation_id,
     };
 
     match GenerationsService::list_generations(&state, context.http.tenant_id.clone(), params).await {
         Ok((items, page_info)) => {
             success(serde_json::json!({ "items": items, "pageInfo": page_info }))
         }
+        Err(error) => failure(&error),
+    }
+}
+
+/// POST /app/v3/api/generations/pricing/estimate
+///
+/// Credit estimate for one generation command, served through the pricing
+/// port the composition host injects. An unconfigured port answers the
+/// envelope with `PricingNotConfigured` (HTTP 501 semantics) so clients can
+/// fall back to "unavailable" instead of a fabricated cost.
+async fn estimate_generation_pricing(
+    State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
+    axum::Json(body): axum::Json<GenerationPricingEstimateRequest>,
+) -> axum::Json<Value> {
+    let context = context_from_extension(&extension);
+    match GenerationsService::estimate_pricing(&state, &context, &body).await {
+        Ok(estimate) => success(serde_json::to_value(estimate).unwrap_or(Value::Null)),
         Err(error) => failure(&error),
     }
 }

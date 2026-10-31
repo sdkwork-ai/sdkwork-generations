@@ -482,6 +482,7 @@ mod tests {
 
     fn command_with_model(model: &str) -> CreateGenerationCommandRequest {
         CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "a cat".to_string(),

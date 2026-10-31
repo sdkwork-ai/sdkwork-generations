@@ -4,4 +4,6 @@ export interface CreateGenerationCommandRequest {
   model?: string;
   inputAssetIds?: string[];
   parameters?: Record<string, unknown>;
+  /** Client-scoped conversation grouping key. Every command of one multi-turn conversation carries the same value, so the record list can reassemble the conversation after a reload. Opaque to the backend; never a context selector. */
+  conversationId?: string;
 }

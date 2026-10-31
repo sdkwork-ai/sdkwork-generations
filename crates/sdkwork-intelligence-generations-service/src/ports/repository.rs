@@ -21,6 +21,8 @@ use crate::error::GenerationsError;
 pub struct CreateGenerationParams {
     pub tenant_id: String,
     pub user_id: String,
+    /// Conversation grouping key persisted in `generation_record.conversation_id`.
+    pub conversation_id: Option<String>,
     pub modality: String,
     pub operation_type: String,
     pub source_provider: Option<String>,
@@ -44,6 +46,8 @@ pub struct ListGenerationsParams {
     pub modality: Option<String>,
     pub operation_type: Option<String>,
     pub q: Option<String>,
+    /// Restrict the page to one conversation grouping key.
+    pub conversation_id: Option<String>,
 }
 
 /// Repository port for generation aggregate persistence.

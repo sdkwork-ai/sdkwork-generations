@@ -34,6 +34,7 @@ const params = {
   modality: 'image',
   operation_type: 'operation_type',
   q: 'q',
+  conversationId: 'conversationId',
 };
 const result = await client.generations.list(params);
 ```
@@ -77,6 +78,7 @@ const params = {
   modality: 'image',
   operation_type: 'operation_type',
   q: 'q',
+  conversationId: 'conversationId',
 };
 const result = await client.generations.list(params);
 ```
@@ -94,6 +96,7 @@ try {
     modality: 'image',
     operation_type: 'operation_type',
     q: 'q',
+    conversationId: 'conversationId',
   };
   const result = await client.generations.list(params);
 } catch (error) {

@@ -156,6 +156,7 @@ mod dispatch_tests {
 
         let record = sample_record("text_to_image");
         let command = CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "a cat astronaut".to_string(),
@@ -197,6 +198,7 @@ mod dispatch_tests {
         let provider = ImageGenerationProviderAdapter::new(Arc::new(ScriptedGateway::default()), "openai");
         let record = sample_record("image_edit");
         let command = CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "restyle".to_string(),
@@ -216,6 +218,7 @@ mod dispatch_tests {
         let provider = ImageGenerationProviderAdapter::new(Arc::new(ScriptedGateway::default()), "openai");
         let record = sample_record("text_to_image");
         let command = CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "neon city".to_string(),
@@ -234,6 +237,7 @@ mod dispatch_tests {
 
     pub(super) fn sample_record(operation_type: &str) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
         sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+            conversation_id: None,
             id: "gen-1".to_string(),
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
@@ -281,6 +285,7 @@ mod sfx_tests {
         let provider = SoundEffectGenerationProviderAdapter::new(gateway, "elevenlabs");
         let record = super::dispatch_tests::sample_record("sound_effects");
         let command = CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "door slam".to_string(),

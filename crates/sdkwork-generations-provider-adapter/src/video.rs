@@ -666,9 +666,34 @@ async fn dispatch_volcengine(
         metadata: None,
         model: model_or_default(inputs, "doubao-seedance-1-0-lite-t2v-250428"),
     };
+    let mut body = serde_json::to_value(&request)
+        .map_err(|error| GenerationsError::Internal(format!("seedance request failed to serialize: {error}")))?;
+    // Official Volcengine Ark Seedance contract: the render knobs ride as
+    // top-level body fields. The previous dispatch dropped them, so the
+    // vendor rendered its defaults and the gateway could not see the
+    // resolution/duration for tier pricing or the prepaid hold.
+    if let Some(resolution) = inputs
+        .resolution
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["resolution"] = serde_json::Value::String(resolution.to_ascii_lowercase());
+    }
+    if let Some(ratio) = inputs
+        .aspect_ratio
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["ratio"] = serde_json::Value::String(ratio.to_string());
+    }
+    if let Some(duration) = inputs.duration_seconds.filter(|value| *value > 0.0) {
+        body["duration"] = serde_json::json!(duration as i64);
+    }
     let response = adapter
         .gateway
-        .volcengine_create_video_task(&request)
+        .volcengine_create_video_task_body(&body)
         .await
         .map_err(|error| GenerationsError::Provider(error.to_string()))?;
     let Some(task_id) = response
@@ -870,6 +895,7 @@ mod video_lifecycle_tests {
 
     fn sample_record(operation_type: &str) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
         sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+            conversation_id: None,
             id: "gen-1".to_string(),
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
@@ -889,6 +915,7 @@ mod video_lifecycle_tests {
 
     fn command(model: &str) -> CreateGenerationCommandRequest {
         CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "a drone shot over rice terraces".to_string(),
@@ -1352,6 +1379,43 @@ mod video_lifecycle_tests {
     }
 
     #[tokio::test]
+    async fn volcengine_forwards_render_knobs_as_top_level_fields() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.volcengine_video_task.lock().unwrap() =
+            Some(VolcengineContentGenerationTaskCreateResponse {
+                task_id: Some("seedance-task-2".to_string()),
+                ..VolcengineContentGenerationTaskCreateResponse::default()
+            });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("volcengine/doubao-seedance-2-0-260128");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "volcengine",
+            "generationConfig": {
+                "resolution": "1080P",
+                "aspectRatio": "16:9",
+                "durationSeconds": 4
+            }
+        }));
+        provider
+            .dispatch(&sample_record("text_to_video"), &command, &context())
+            .await
+            .expect("seedance dispatch succeeds");
+
+        let request = gateway
+            .last_volcengine_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("seedance request captured");
+        // The PC spells resolution "1080P"; the vendor contract and the
+        // pricing catalog spell it "1080p" — the adapter normalizes.
+        assert_eq!(request["resolution"], serde_json::json!("1080p"));
+        assert_eq!(request["ratio"], serde_json::json!("16:9"));
+        assert_eq!(request["duration"], serde_json::json!(4));
+    }
+
+    #[tokio::test]
     async fn volcengine_forwards_every_reference_image_as_a_content_part() {
         let gateway = Arc::new(ScriptedGateway::default());
         *gateway.volcengine_video_task.lock().unwrap() =
@@ -1384,11 +1448,12 @@ mod video_lifecycle_tests {
             .unwrap()
             .clone()
             .expect("seedance request captured");
-        let image_parts: Vec<&str> = request
-            .content
+        let image_parts: Vec<&str> = request["content"]
+            .as_array()
+            .expect("content array")
             .iter()
-            .filter(|part| part.r#type == "image_url")
-            .filter_map(|part| part.image_url.as_deref())
+            .filter(|part| part["type"] == "image_url")
+            .filter_map(|part| part["image_url"].as_str())
             .collect();
         assert_eq!(
             image_parts,
@@ -1398,10 +1463,16 @@ mod video_lifecycle_tests {
             ],
             "every reference image becomes a content part"
         );
-        let text_parts = request
-            .content
+        // Render knobs must reach the vendor body as top-level fields so the
+        // vendor honors them and the gateway prices the requested tier.
+        assert_eq!(request["resolution"], serde_json::json!(null), "no resolution declared");
+        assert_eq!(request.get("ratio"), None, "no ratio declared");
+        assert_eq!(request.get("duration"), None, "no duration declared");
+        let text_parts = request["content"]
+            .as_array()
+            .expect("content array")
             .iter()
-            .filter(|part| part.r#type == "text")
+            .filter(|part| part["type"] == "text")
             .count();
         assert_eq!(text_parts, 1, "the prompt rides exactly one text part");
         assert_eq!(outcome.record.status, GenerationStatus::Running);

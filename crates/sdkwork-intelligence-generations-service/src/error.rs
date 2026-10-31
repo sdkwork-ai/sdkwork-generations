@@ -33,6 +33,16 @@ pub enum GenerationsError {
     #[error("rate limited: {0}")]
     RateLimited(String),
 
+    /// Credit estimation is not wired on this deployment. The pricing port
+    /// lives in the composition host (cloudrouter); a missing implementation
+    /// is a deployment misconfiguration, reported as 501.
+    #[error("generation pricing estimation is not configured on this deployment")]
+    PricingNotConfigured,
+
+    /// The pricing engine rejected an estimation request.
+    #[error("pricing error: {0}")]
+    Pricing(String),
+
     /// Unclassified internal error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -49,6 +59,8 @@ impl GenerationsError {
             Self::Asset(_) => 502,
             Self::Conflict(_) => 409,
             Self::RateLimited(_) => 429,
+            Self::PricingNotConfigured => 501,
+            Self::Pricing(_) => 503,
             Self::Internal(_) => 500,
         }
     }
@@ -63,6 +75,8 @@ impl GenerationsError {
             Self::Asset(_) => 50202,
             Self::Conflict(_) => 40901,
             Self::RateLimited(_) => 42901,
+            Self::PricingNotConfigured => 50101,
+            Self::Pricing(_) => 50301,
             Self::Internal(_) => 50001,
         }
     }

@@ -579,6 +579,7 @@ mod tests {
         operation_type: &str,
     ) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
         sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+            conversation_id: None,
             id: "gen-1".to_string(),
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
@@ -601,6 +602,7 @@ mod tests {
         parameters: Option<serde_json::Value>,
     ) -> CreateGenerationCommandRequest {
         CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "a precise router diagram".to_string(),

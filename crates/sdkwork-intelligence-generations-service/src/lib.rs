@@ -18,6 +18,11 @@ pub use domain::models::{
     GenerationResult, GenerationResultPage, GenerationStatus, GenerationTimelineEvent,
     GenerationTimelineEventPage, MediaResource, PageInfo, SaveGenerationResultToAssetsRequest,
 };
+pub use domain::pricing::{
+    default_operation_for_modality, GenerationPricingError, GenerationPricingEstimate,
+    GenerationPricingEstimateLine, GenerationPricingEstimateRequest, GenerationPricingPort,
+    GenerationPricingScope, UnconfiguredGenerationPricingPort,
+};
 pub use error::GenerationsError;
 pub use service::{GenerationsService, GenerationsServiceState, build_app_routes};
 

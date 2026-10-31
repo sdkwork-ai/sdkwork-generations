@@ -101,6 +101,9 @@ pub struct GenerationRecord {
     pub tenant_id: String,
     #[serde(rename = "organizationId")]
     pub organization_id: Option<String>,
+    /// Conversation grouping key the creating command carried, when any.
+    #[serde(rename = "conversationId", skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     #[serde(rename = "userId")]
     pub user_id: String,
     pub modality: GenerationModality,
@@ -226,6 +229,11 @@ pub struct CreateGenerationCommandRequest {
     #[serde(rename = "inputAssetIds")]
     pub input_asset_ids: Option<Vec<String>>,
     pub parameters: Option<serde_json::Value>,
+    /// Client-scoped conversation grouping key (`conversationId`). Opaque to
+    /// the backend; every command of one multi-turn conversation carries the
+    /// same value so the record list can reassemble it.
+    #[serde(rename = "conversationId", default)]
+    pub conversation_id: Option<String>,
 }
 
 /// Request body for generation actions (cancel / retry).

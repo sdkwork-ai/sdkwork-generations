@@ -44,7 +44,7 @@
     },
     {
       "path": "README.md",
-      "sha256": "49491aba7ab461109e94924c6caf38a3e60bb65bb594164ed7e8707adf72667e"
+      "sha256": "b9d0ee7053c22bd3078cbe232b81931422127ccdabc234ff6a16884c58942f0d"
     },
     {
       "path": "sdkwork-sdk.json",
@@ -56,7 +56,7 @@
     },
     {
       "path": "src/api/generations-api.ts",
-      "sha256": "879ecbc7ddc9b29ea5a6facf282815c84354351b46ad6d41c62fa921faf51758"
+      "sha256": "0f843d45572a52f7d85d78aaf90db5a25ebaa34da800a473acb2f454139d49f9"
     },
     {
       "path": "src/api/index.ts",
@@ -92,7 +92,7 @@
     },
     {
       "path": "src/types/create-generation-command-request.ts",
-      "sha256": "a946a8550f9661e1b56d3169ad1f9f920ff120a17b5ff44fe12f66ecbbf7da7e"
+      "sha256": "f322d901ced0d2dd99005b64eb69e7da20495c10a94cdffdf80edbd3331a2384"
     },
     {
       "path": "src/types/favorite-generation-request.ts",
@@ -115,12 +115,24 @@
       "sha256": "4d7b380961ec13f19a3390dbf8bd29b88d3f48e6fa2bda9e723e67eba3646a94"
     },
     {
+      "path": "src/types/generation-pricing-estimate-line.ts",
+      "sha256": "5aeaa9a615dcc508e1c32c1e20db7d58f826be8e5ee6b3574b0a705cced89416"
+    },
+    {
+      "path": "src/types/generation-pricing-estimate-request.ts",
+      "sha256": "03dcde5c1ac5fb8db4a120fcc7c1410c14e5ee783547460ddac691734cf9950c"
+    },
+    {
+      "path": "src/types/generation-pricing-estimate.ts",
+      "sha256": "c6927df00e2828a93faf488d95942ad312b26d1ff9c35e1660fc088621317425"
+    },
+    {
       "path": "src/types/generation-record-page.ts",
       "sha256": "0b9e489283bff7b79fdd8e038460d9f15fe0e65205c0a0e3b85728c462517194"
     },
     {
       "path": "src/types/generation-record.ts",
-      "sha256": "b1465fd56dde7637909098c6a055c2f3b4023313a4c0d6c022a6511331ecaff6"
+      "sha256": "fb7a2a6bf91a590d4988f4dfd5efcda06b5f30bb3405d201e2fb6b292e8f9c93"
     },
     {
       "path": "src/types/generation-result-page.ts",
@@ -169,6 +181,10 @@
     {
       "path": "src/types/generations-music-text-to-response202.ts",
       "sha256": "54029be8253a4afd79c461e9040149a46df52578e4eeecfe9745638cff229431"
+    },
+    {
+      "path": "src/types/generations-pricing-estimate-response.ts",
+      "sha256": "b800d1b8f9a2a5c1fe3a5e658c93163db98d6b894f0e38d67ce50fb9f6a146ff"
     },
     {
       "path": "src/types/generations-results-list-response.ts",
@@ -228,7 +244,7 @@
     },
     {
       "path": "src/types/index.ts",
-      "sha256": "fb0e48b0c8ae9547538b4273baec19bc8dd9643f6999e060ab184c23e3e63512"
+      "sha256": "aa91a9ad2dbb5649fab0066903da2f3e7b05537dc2c334916ecabd3acb805acf"
     },
     {
       "path": "src/types/media-resource.ts",

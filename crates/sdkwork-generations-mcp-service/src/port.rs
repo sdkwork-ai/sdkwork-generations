@@ -58,6 +58,7 @@ impl StateGenerationsMcpPort {
         GenerationsRequestContext {
             http: sdkwork_intelligence_generations_service::GenerationsHttpRequestContext {
                 tenant_id: self.tenant_id.clone(),
+                organization_id: None,
                 user_id: self.user_id.clone(),
                 trace_id: uuid::Uuid::new_v4().to_string(),
             },
@@ -150,6 +151,7 @@ impl GenerationsMcpPort for InMemoryGenerationsMcpPort {
             result_count: 0,
             created_at: now.clone(),
             updated_at: now,
+            conversation_id: None,
         };
         self.records.lock().await.push(record.clone());
         Ok(record)

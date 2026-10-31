@@ -62,6 +62,7 @@ pub(crate) fn create_command(
         model: model.map(str::to_string),
         input_asset_ids,
         parameters: Some(parameters),
+        conversation_id: None,
     }
 }
 

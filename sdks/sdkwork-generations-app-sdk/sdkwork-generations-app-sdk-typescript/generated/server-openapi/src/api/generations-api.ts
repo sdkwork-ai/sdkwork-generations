@@ -1,8 +1,22 @@
 import { appApiPath } from './paths';
 import type { ApiRequestOptions, HttpClient } from '../http/client';
 
-import type { CreateGenerationCommandRequest, FavoriteGenerationRequest, GenerationActionRequest, GenerationCommandResponse, GenerationModality, GenerationRecord, GenerationResult, GenerationStatus, GenerationTimelineEvent, SaveGenerationResultToAssetsRequest } from '../types';
+import type { CreateGenerationCommandRequest, FavoriteGenerationRequest, GenerationActionRequest, GenerationCommandResponse, GenerationModality, GenerationPricingEstimate, GenerationPricingEstimateRequest, GenerationRecord, GenerationResult, GenerationStatus, GenerationTimelineEvent, SaveGenerationResultToAssetsRequest } from '../types';
 
+
+export class GenerationsPricingApi {
+  private client: HttpClient;
+
+  constructor(client: HttpClient) {
+    this.client = client;
+  }
+
+
+/** Estimate generation credits. */
+  async estimate(body: GenerationPricingEstimateRequest, requestOptions?: ApiRequestOptions): Promise<GenerationPricingEstimate> {
+    return this.client.request<GenerationPricingEstimate>(appApiPath(`/generations/pricing/estimate`), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'POST' as any, body, contentType: 'application/json', sdkworkUnwrapKind: 'item' });
+  }
+}
 
 export interface GenerationsTimelineListParams {
   cursor?: string;
@@ -296,6 +310,7 @@ export interface GenerationsListParams {
   modality?: GenerationModality;
   operationType?: string;
   q?: string;
+  conversationId?: string;
 }
 
 export interface GenerationsCancelParams {
@@ -319,6 +334,7 @@ export class GenerationsApi {
   public readonly voice: GenerationsVoiceApi;
   public readonly results: GenerationsResultsApi;
   public readonly timeline: GenerationsTimelineApi;
+  public readonly pricing: GenerationsPricingApi;
 
   constructor(client: HttpClient) {
     this.client = client;
@@ -329,6 +345,7 @@ export class GenerationsApi {
     this.voice = new GenerationsVoiceApi(client);
     this.results = new GenerationsResultsApi(client);
     this.timeline = new GenerationsTimelineApi(client);
+    this.pricing = new GenerationsPricingApi(client);
   }
 
 
@@ -340,6 +357,7 @@ async list(params?: GenerationsListParams, requestOptions?: ApiRequestOptions): 
       { name: 'modality', value: params?.modality, style: 'form', explode: true, allowReserved: false },
       { name: 'operation_type', value: params?.operationType, style: 'form', explode: true, allowReserved: false },
       { name: 'q', value: params?.q, style: 'form', explode: true, allowReserved: false },
+      { name: 'conversationId', value: params?.conversationId, style: 'form', explode: true, allowReserved: false },
     ]);
     return this.client.request<{ items: GenerationRecord[]; pageInfo: { mode: 'cursor'; nextCursor?: string | null; hasMore: boolean; }; }>(appendQueryString(appApiPath(`/generations`), query), { ...(requestOptions?.signal !== undefined ? { signal: requestOptions.signal } : {}), ...(requestOptions?.timeout !== undefined ? { timeout: requestOptions.timeout } : {}), method: 'GET' as any, sdkworkUnwrapKind: 'page' });
   }

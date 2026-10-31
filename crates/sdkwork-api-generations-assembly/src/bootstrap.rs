@@ -8,9 +8,17 @@ pub use sdkwork_web_bootstrap::ApiAssemblyContribution;
 use sdkwork_web_bootstrap::{PgPoolReadinessCheck, ReadinessCheck, WebModule};
 use sdkwork_web_core::HttpRouteManifest;
 
+pub use sdkwork_intelligence_generations_service::domain::pricing::{
+    GenerationPricingError, GenerationPricingEstimate, GenerationPricingEstimateLine,
+    GenerationPricingEstimateRequest, GenerationPricingPort, GenerationPricingScope,
+};
+
 pub type ApiAssembly = ApiAssemblyContribution;
 
-async fn assemble_business_routes(pool: sqlx::PgPool) -> Router {
+async fn assemble_business_routes(
+    pool: sqlx::PgPool,
+    pricing_port: Option<Arc<dyn GenerationPricingPort>>,
+) -> Router {
     let generation_repo = Arc::new(repository::PostgresGenerationRepository::new(pool.clone()));
     let result_repo = Arc::new(repository::PostgresGenerationResultRepository::new(pool.clone()));
     let timeline_repo = Arc::new(repository::PostgresTimelineRepository::new(pool.clone()));
@@ -31,7 +39,10 @@ async fn assemble_business_routes(pool: sqlx::PgPool) -> Router {
         providers,
         asset_port,
         usage_port,
-    );
+    )
+    .with_pricing_port(pricing_port.unwrap_or_else(|| {
+        Arc::new(sdkwork_intelligence_generations_service::UnconfiguredGenerationPricingPort)
+    }));
 
     let app_router = sdkwork_routes_generations_app_api::build_router().with_state(state.clone());
     let backend_router = sdkwork_routes_generations_backend_api::build_router().with_state(state);
@@ -79,7 +90,7 @@ pub async fn assemble_api_router() -> Result<ApiAssembly, String> {
         .ok_or_else(|| "Generations assembly requires PostgreSQL".to_string())?
         .clone();
     build_api_contribution(
-        assemble_business_routes(pool.clone()).await,
+        assemble_business_routes(pool.clone(), None).await,
         Arc::new(PgPoolReadinessCheck::new(pool)),
     )
 }
@@ -87,13 +98,24 @@ pub async fn assemble_api_router() -> Result<ApiAssembly, String> {
 /// Assemble the generations application router against a caller-provided database pool
 /// so the platform cloud gateway can share its process-wide PostgreSQL pool.
 pub async fn assemble_api_router_with_pool(pool: DatabasePool) -> Result<ApiAssembly, String> {
+    assemble_api_router_with_pool_and_pricing(pool, None).await
+}
+
+/// Assemble with an explicit pricing port so the composition host that owns
+/// the credit-pricing engine (sdkwork-cloudrouter) can serve
+/// `POST /app/v3/api/generations/pricing/estimate` with real rates. `None`
+/// keeps the unconfigured port and the endpoint answers 501.
+pub async fn assemble_api_router_with_pool_and_pricing(
+    pool: DatabasePool,
+    pricing_port: Option<Arc<dyn GenerationPricingPort>>,
+) -> Result<ApiAssembly, String> {
     let host = bootstrap_generations_database_with_pool(pool).await?;
     let pg_pool = host
         .as_postgres()
         .ok_or_else(|| "Generations assembly requires PostgreSQL".to_string())?
         .clone();
     build_api_contribution(
-        assemble_business_routes(pg_pool.clone()).await,
+        assemble_business_routes(pg_pool.clone(), pricing_port).await,
         Arc::new(PgPoolReadinessCheck::new(pg_pool)),
     )
 }
@@ -178,11 +200,11 @@ mod repository {
             sqlx::query(
                 r#"
                 INSERT INTO generation_record (
-                    id, tenant_id, organization_id, user_id, modality, status, operation_type,
-                    source_provider, source_job_id, prompt_preview, parameter_snapshot,
-                    input_refs_json, created_at, updated_at
+                    id, tenant_id, organization_id, user_id, conversation_id, modality, status,
+                    operation_type, source_provider, source_job_id, prompt_preview,
+                    parameter_snapshot, input_refs_json, created_at, updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7, $8, $9, $10, $11,
+                VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9, $10, $11, $12,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 "#,
             )
@@ -194,6 +216,7 @@ mod repository {
             // column default is applied here instead.
             .bind(params.organization_id.as_deref().unwrap_or("0"))
             .bind(&params.user_id)
+            .bind(&params.conversation_id)
             .bind(&params.modality)
             .bind(&params.operation_type)
             .bind(&params.source_provider)
@@ -208,6 +231,7 @@ mod repository {
                 id,
                 tenant_id: params.tenant_id,
                 organization_id: params.organization_id,
+                conversation_id: params.conversation_id,
                 user_id: params.user_id,
                 modality: GenerationModality::parse(&params.modality).unwrap_or(GenerationModality::Image),
                 status: GenerationStatus::Queued,
@@ -224,7 +248,7 @@ mod repository {
 
         async fn get(&self, id: &str) -> Result<Option<GenerationRecord>, GenerationsError> {
             let row = sqlx::query_as::<_, GenerationRecordRow>(
-                "SELECT id, tenant_id, organization_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE id = $1",
+                "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE id = $1",
             )
             .bind(id)
             .fetch_optional(&self.pool)
@@ -238,32 +262,86 @@ mod repository {
             params: ListGenerationsParams,
         ) -> Result<(Vec<GenerationRecord>, Option<String>, bool), GenerationsError> {
             let page_size = params.page_size.unwrap_or(20).min(100);
-            let rows = sqlx::query_as::<_, GenerationRecordRow>(
-                r#"
-                SELECT id, tenant_id, organization_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at
-                FROM generation_record
-                WHERE tenant_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2
-                "#,
-            )
-            .bind(&params.tenant_id)
-            .bind(page_size + 1)
-            .fetch_all(&self.pool)
-            .await?;
+            // The WHERE clause is assembled from the caller's filters; every
+            // clause binds its own placeholder so filter values stay parameter
+            // data, never SQL text. The cursor is a keyset pair
+            // (`<created_at RFC 3339>|<id>`): the previous implementation
+            // accepted a cursor and never applied it, so every page repeated
+            // the newest rows.
+            let mut binds = ListBinds::default();
+            if let Some(conversation_id) = params.conversation_id.as_deref().filter(|v| !v.trim().is_empty()) {
+                binds.conversation_id = Some(conversation_id.trim().to_owned());
+            }
+            if let Some(status) = params.status.as_deref().filter(|v| !v.trim().is_empty()) {
+                binds.status = Some(status.trim().to_owned());
+            }
+            if let Some(modality) = params.modality.as_deref().filter(|v| !v.trim().is_empty()) {
+                binds.modality = Some(modality.trim().to_owned());
+            }
+            if let Some(operation_type) = params.operation_type.as_deref().filter(|v| !v.trim().is_empty()) {
+                binds.operation_type = Some(operation_type.trim().to_owned());
+            }
+            if let Some(q) = params.q.as_deref().filter(|v| !v.trim().is_empty()) {
+                binds.q = Some(format!("%{}%", q.trim()));
+            }
+            if let Some(cursor_id) = params.cursor.as_deref().filter(|v| !v.trim().is_empty()) {
+                binds.cursor = Some(decode_list_cursor(cursor_id.trim()).ok_or_else(|| {
+                    GenerationsError::InvalidInput("generation list cursor is not a valid keyset token".to_owned())
+                })?);
+            }
+            let sql = assemble_generation_list_sql(
+                binds.conversation_id.is_some(),
+                binds.status.is_some(),
+                binds.modality.is_some(),
+                binds.operation_type.is_some(),
+                binds.q.is_some(),
+                binds.cursor.is_some(),
+            );
+
+            // The assembled SQL contains only fixed clause fragments; every
+            // filter value binds as a parameter, so the dynamic string carries
+            // no injection surface (the audit `AssertSqlSafe` asserts).
+            let mut query = sqlx::query_as::<_, GenerationRecordRow>(sqlx::AssertSqlSafe(sql))
+                .bind(&params.tenant_id);
+            if let Some(value) = binds.conversation_id.as_deref() {
+                query = query.bind(value);
+            }
+            if let Some(value) = binds.status.as_deref() {
+                query = query.bind(value);
+            }
+            if let Some(value) = binds.modality.as_deref() {
+                query = query.bind(value);
+            }
+            if let Some(value) = binds.operation_type.as_deref() {
+                query = query.bind(value);
+            }
+            if let Some(value) = binds.q.as_deref() {
+                query = query.bind(value);
+            }
+            if let Some((created_at, _)) = binds.cursor.as_ref() {
+                query = query.bind(created_at);
+            }
+            if let Some((_, id)) = binds.cursor.as_ref() {
+                query = query.bind(id);
+            }
+            query = query.bind(i64::from(page_size + 1));
+
+            let rows = query.fetch_all(&self.pool).await?;
 
             let has_more = rows.len() > page_size as usize;
-            let items: Vec<GenerationRecord> = rows
+            let taken: Vec<GenerationRecordRow> = rows
                 .into_iter()
                 .take(page_size as usize)
-                .map(|r| r.into_record())
                 .collect();
-
             let next_cursor = if has_more {
-                items.last().map(|r| r.id.clone())
+                taken.last().map(|row| encode_list_cursor(row))
             } else {
                 None
             };
+            let items: Vec<GenerationRecord> = taken
+                .into_iter()
+                .map(|r| r.into_record())
+                .collect();
 
             Ok((items, next_cursor, has_more))
         }
@@ -376,6 +454,7 @@ mod repository {
         id: String,
         tenant_id: String,
         organization_id: Option<String>,
+        conversation_id: Option<String>,
         user_id: String,
         modality: String,
         status: String,
@@ -389,12 +468,97 @@ mod repository {
         updated_at: sqlx::types::time::OffsetDateTime,
     }
 
+    /// Assembles the generation list SQL. Every filter is a fixed clause
+    /// fragment and every value binds as a parameter — filter presence only
+    /// decides which clauses and placeholder numbers appear, never the text
+    /// of a value.
+    fn assemble_generation_list_sql(
+        conversation_id: bool,
+        status: bool,
+        modality: bool,
+        operation_type: bool,
+        q: bool,
+        cursor: bool,
+    ) -> String {
+        let mut sql = String::from(
+            "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE tenant_id = $1",
+        );
+        let mut placeholder = 2usize;
+        if conversation_id {
+            sql.push_str(&format!(" AND conversation_id = ${placeholder}"));
+            placeholder += 1;
+        }
+        if status {
+            sql.push_str(&format!(" AND status = ${placeholder}"));
+            placeholder += 1;
+        }
+        if modality {
+            sql.push_str(&format!(" AND modality = ${placeholder}"));
+            placeholder += 1;
+        }
+        if operation_type {
+            sql.push_str(&format!(" AND operation_type = ${placeholder}"));
+            placeholder += 1;
+        }
+        if q {
+            sql.push_str(&format!(" AND prompt_preview ILIKE ${placeholder}"));
+            placeholder += 1;
+        }
+        if cursor {
+            sql.push_str(&format!(
+                " AND (created_at, id) < (${placeholder}::timestamptz, ${cursor_placeholder})",
+                placeholder = placeholder,
+                cursor_placeholder = placeholder + 1,
+            ));
+            placeholder += 2;
+        }
+        sql.push_str(" ORDER BY created_at DESC, id DESC");
+        sql.push_str(&format!(" LIMIT ${placeholder}"));
+        sql
+    }
+
+    /// Filter values collected before the list SQL is assembled, so clause
+    /// text and bind order cannot drift apart.
+    #[derive(Default)]
+    struct ListBinds {
+        conversation_id: Option<String>,
+        status: Option<String>,
+        modality: Option<String>,
+        operation_type: Option<String>,
+        q: Option<String>,
+        cursor: Option<(time::OffsetDateTime, String)>,
+    }
+
+    /// Encodes the keyset cursor as `<created_at RFC 3339>|<record id>`.
+    fn encode_list_cursor(row: &GenerationRecordRow) -> String {
+        format!(
+            "{}|{}",
+            row.created_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+            row.id
+        )
+    }
+
+    /// Decodes a keyset cursor; `None` marks a malformed token.
+    fn decode_list_cursor(cursor: &str) -> Option<(sqlx::types::time::OffsetDateTime, String)> {
+        let (created_at, id) = cursor.split_once('|')?;
+        let created_at = time::OffsetDateTime::parse(
+            created_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()?;
+        let id = id.trim().to_owned();
+        (!id.is_empty()).then_some((created_at, id))
+    }
+
     impl GenerationRecordRow {
         fn into_record(self) -> GenerationRecord {
             GenerationRecord {
                 id: self.id,
                 tenant_id: self.tenant_id,
                 organization_id: self.organization_id,
+                conversation_id: self.conversation_id,
                 user_id: self.user_id,
                 modality: GenerationModality::parse(&self.modality).unwrap_or(GenerationModality::Image),
                 status: GenerationStatus::parse(&self.status).unwrap_or(GenerationStatus::Queued),
@@ -408,6 +572,35 @@ mod repository {
                 updated_at: rfc3339_timestamp(self.updated_at),
             }
         }
+    }
+
+    #[test]
+    fn list_sql_without_filters_binds_tenant_and_limit_only() {
+        let sql = assemble_generation_list_sql(false, false, false, false, false, false);
+        assert!(sql.ends_with("ORDER BY created_at DESC, id DESC LIMIT $2"));
+        assert!(!sql.contains(" AND "));
+    }
+
+    #[test]
+    fn list_sql_numbers_every_filter_clause_in_bind_order() {
+        let sql = assemble_generation_list_sql(true, true, true, true, true, true);
+        assert!(sql.contains(" AND conversation_id = $2"));
+        assert!(sql.contains(" AND status = $3"));
+        assert!(sql.contains(" AND modality = $4"));
+        assert!(sql.contains(" AND operation_type = $5"));
+        assert!(sql.contains(" AND prompt_preview ILIKE $6"));
+        assert!(sql.contains(" AND (created_at, id) < ($7::timestamptz, $8)"));
+        assert!(sql.ends_with("ORDER BY created_at DESC, id DESC LIMIT $9"));
+    }
+
+    #[test]
+    fn list_sql_keeps_clauses_absent_when_their_filter_is_off() {
+        let sql = assemble_generation_list_sql(false, true, false, false, true, false);
+        assert!(!sql.contains("conversation_id ="));
+        assert!(sql.contains(" AND status = $2"));
+        assert!(!sql.contains(" AND modality"));
+        assert!(sql.contains(" AND prompt_preview ILIKE $3"));
+        assert!(sql.ends_with("LIMIT $4"));
     }
 
     // -----------------------------------------------------------------------

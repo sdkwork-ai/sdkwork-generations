@@ -54,6 +54,7 @@ impl GenerationRepository for InMemoryGenerationRepository {
             id: id.clone(),
             tenant_id: params.tenant_id,
             organization_id: params.organization_id,
+            conversation_id: params.conversation_id,
             user_id: params.user_id,
             modality: GenerationModality::parse(&params.modality)
                 .unwrap_or(GenerationModality::Image),
@@ -79,13 +80,74 @@ impl GenerationRepository for InMemoryGenerationRepository {
         &self,
         params: ListGenerationsParams,
     ) -> Result<(Vec<GenerationRecord>, Option<String>, bool), GenerationsError> {
+        // The in-memory double mirrors the Postgres filter semantics so the
+        // lifecycle tests exercise the same list contract.
+        let cursor = params
+            .cursor
+            .as_deref()
+            .map(|token| token.split_once('|').map(|(created_at, id)| (created_at.to_owned(), id.to_owned())));
         let records = self.records.lock().unwrap();
         let mut items: Vec<GenerationRecord> = records
             .values()
             .filter(|record| record.tenant_id == params.tenant_id)
+            .filter(|record| {
+                params
+                    .conversation_id
+                    .as_deref()
+                    .map(|key| record.conversation_id.as_deref() == Some(key))
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                params
+                    .status
+                    .as_deref()
+                    .map(|status| record.status.to_string() == status)
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                params
+                    .modality
+                    .as_deref()
+                    .map(|modality| record.modality.to_string() == modality)
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                params
+                    .operation_type
+                    .as_deref()
+                    .map(|operation| record.operation_type == operation)
+                    .unwrap_or(true)
+            })
+            .filter(|record| {
+                params
+                    .q
+                    .as_deref()
+                    .map(|needle| {
+                        record
+                            .prompt_preview
+                            .as_deref()
+                            .map(|preview| {
+                                preview.to_lowercase().contains(&needle.trim().to_lowercase())
+                            })
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(true)
+            })
+            .filter(|record| match cursor.as_ref() {
+                Some(Some((created_at, id))) => {
+                    record.created_at.as_str() < created_at.as_str()
+                        || (record.created_at == *created_at && record.id < *id)
+                }
+                _ => true,
+            })
             .cloned()
             .collect();
-        items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        items.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
         Ok((items, None, false))
     }
 
@@ -459,6 +521,7 @@ fn command(model: &str) -> CreateGenerationCommandRequest {
         model: Some(model.to_string()),
         input_asset_ids: None,
         parameters: None,
+        conversation_id: None,
     }
 }
 
@@ -705,12 +768,122 @@ async fn failed_video_dispatch_persists_failed_record() {
             modality: Some("video".to_string()),
             operation_type: None,
             q: None,
+            conversation_id: None,
         })
         .await
         .expect("records listed")
         .0;
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].status, GenerationStatus::Failed);
+}
+
+#[tokio::test]
+async fn conversation_grouping_reassembles_one_multi_turn_conversation() {
+    // Every command of one multi-turn conversation carries the same
+    // `conversationId`; the record list must reassemble exactly that
+    // conversation instead of fragmenting into one session per record (the
+    // reload bug the creative composer used to ship with).
+    let adapter = ScriptedProvider::new(
+        GenerationModality::Image,
+        "openai",
+        vec![
+            DispatchBehavior::PendOnTask {
+                vendor: "openai",
+                task_id: "image-task-1",
+            },
+            DispatchBehavior::PendOnTask {
+                vendor: "openai",
+                task_id: "image-task-2",
+            },
+            DispatchBehavior::PendOnTask {
+                vendor: "openai",
+                task_id: "image-task-3",
+            },
+        ],
+        vec![],
+    );
+    let state = service_state(vec![Box::new(adapter)]);
+
+    let mut first = command("google/gemini-2.5-flash-image");
+    first.conversation_id = Some("conv-1".to_string());
+    let mut second = command("google/gemini-2.5-flash-image");
+    second.conversation_id = Some("conv-1".to_string());
+    let ungrouped = command("google/gemini-2.5-flash-image");
+
+    let created_first = GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &first,
+    )
+    .await
+    .expect("first command pends");
+    let created_second = GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &second,
+    )
+    .await
+    .expect("second command pends");
+    GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &ungrouped,
+    )
+    .await
+    .expect("ungrouped command pends");
+
+    assert_eq!(
+        created_first.generation.conversation_id.as_deref(),
+        Some("conv-1"),
+        "the record echoes the grouping key"
+    );
+
+    let conversation_records = state
+        .repository()
+        .list(ListGenerationsParams {
+            tenant_id: "tenant-1".to_string(),
+            cursor: None,
+            page_size: Some(10),
+            status: None,
+            modality: None,
+            operation_type: None,
+            q: None,
+            conversation_id: Some("conv-1".to_string()),
+        })
+        .await
+        .expect("conversation records listed")
+        .0;
+    assert_eq!(
+        conversation_records
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![created_second.generation.id.as_str(), created_first.generation.id.as_str()],
+        "exactly the two conversation records, newest first"
+    );
+
+    let all_records = state
+        .repository()
+        .list(ListGenerationsParams {
+            tenant_id: "tenant-1".to_string(),
+            cursor: None,
+            page_size: Some(10),
+            status: None,
+            modality: None,
+            operation_type: None,
+            q: None,
+            conversation_id: None,
+        })
+        .await
+        .expect("all records listed")
+        .0;
+    assert_eq!(all_records.len(), 3, "ungrouped records stay standalone");
 }
 
 // ---------------------------------------------------------------------------

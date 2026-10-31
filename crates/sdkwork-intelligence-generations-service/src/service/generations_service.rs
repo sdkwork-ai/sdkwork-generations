@@ -9,6 +9,10 @@ use crate::domain::models::{
     GenerationModality, GenerationRecord, GenerationResult, GenerationStatus,
     GenerationTimelineEvent, PageInfo, SaveGenerationResultToAssetsRequest,
 };
+use crate::domain::pricing::{
+    GenerationPricingEstimate, GenerationPricingEstimateRequest, GenerationPricingError,
+    GenerationPricingPort, GenerationPricingScope, UnconfiguredGenerationPricingPort,
+};
 use crate::error::GenerationsError;
 use crate::ports::{
     AssetPort, CreateGenerationParams, GenerationDispatchOutcome, GenerationProvider,
@@ -36,10 +40,15 @@ pub struct GenerationsServiceState {
     providers: Arc<Vec<Box<dyn GenerationProvider>>>,
     asset_port: Arc<dyn AssetPort>,
     usage_port: Arc<dyn GenerationUsagePort>,
+    pricing_port: Arc<dyn GenerationPricingPort>,
 }
 
 impl GenerationsServiceState {
     /// Create a new service state.
+    ///
+    /// The pricing port defaults to [`UnconfiguredGenerationPricingPort`];
+    /// hosts that own a pricing engine wire a real implementation through
+    /// [`GenerationsServiceState::with_pricing_port`].
     pub fn new(
         repository: Arc<dyn GenerationRepository>,
         result_repository: Arc<dyn GenerationResultRepository>,
@@ -57,7 +66,23 @@ impl GenerationsServiceState {
             providers,
             asset_port,
             usage_port,
+            pricing_port: Arc::new(UnconfiguredGenerationPricingPort),
         }
+    }
+
+    /// Replace the pricing port (builder style) so the composition host can
+    /// inject its own credit-estimation implementation.
+    pub fn with_pricing_port(
+        mut self,
+        pricing_port: Arc<dyn GenerationPricingPort>,
+    ) -> Self {
+        self.pricing_port = pricing_port;
+        self
+    }
+
+    /// Get a reference to the pricing port.
+    pub fn pricing_port(&self) -> &Arc<dyn GenerationPricingPort> {
+        &self.pricing_port
     }
 
     /// Get a reference to the repository.
@@ -107,6 +132,37 @@ impl GenerationsServiceState {
 pub struct GenerationsService;
 
 impl GenerationsService {
+    // -- Pricing estimation -------------------------------------------------
+
+    /// Estimate the credit consumption of one generation command.
+    ///
+    /// Delegates to the state's pricing port; the port's error taxonomy maps
+    /// onto HTTP semantics in the handler (`NotConfigured` → 501, `Backend`
+    /// → 503). Unpriced commands are a successful response with
+    /// `priced: false`, not an error: the estimate is advisory and a pricing
+    /// gap is a diagnosis, not a server fault.
+    pub async fn estimate_pricing(
+        state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
+        request: &GenerationPricingEstimateRequest,
+    ) -> Result<GenerationPricingEstimate, GenerationsError> {
+        let scope = GenerationPricingScope {
+            tenant_id: context.http.tenant_id.clone(),
+            organization_id: context.http.organization_id.clone(),
+            user_id: context.http.user_id.clone(),
+        };
+        state
+            .pricing_port
+            .estimate(request, &scope)
+            .await
+            .map_err(|error| match error {
+                GenerationPricingError::NotConfigured => GenerationsError::PricingNotConfigured,
+                GenerationPricingError::Backend(message) => {
+                    GenerationsError::Pricing(message)
+                }
+            })
+    }
+
     // -- Create generation --------------------------------------------------
 
     /// Create a generation by dispatching to the appropriate provider.
@@ -132,6 +188,7 @@ impl GenerationsService {
                 // a client-supplied context selector (API_SPEC §10.0/§14).
                 tenant_id: context.http.tenant_id.clone(),
                 user_id: context.http.user_id.clone(),
+                conversation_id: normalize_conversation_id(&command.conversation_id),
                 modality: modality.to_string(),
                 operation_type: operation_type.to_string(),
                 source_provider: Some(provider.vendor().to_string()),
@@ -973,6 +1030,23 @@ mod validation_tests {
             "referenceImages": [{ "publicUrl": "https://cdn.example/ref.png" }]
         })).is_ok());
     }
+}
+
+/// Normalizes the client conversation grouping key: trimmed, capped at 128
+/// characters, empty means absent. The key is opaque grouping metadata, never
+/// a context selector.
+fn normalize_conversation_id(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|trimmed| !trimmed.is_empty())
+        .map(|trimmed| {
+            if trimmed.chars().count() > 128 {
+                trimmed.chars().take(128).collect()
+            } else {
+                trimmed.to_owned()
+            }
+        })
 }
 
 /// Truncate a prompt to the persisted preview length.

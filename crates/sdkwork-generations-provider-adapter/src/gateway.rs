@@ -319,6 +319,22 @@ pub trait MediaSdkGateway: Send + Sync {
         })
     }
 
+    /// Posts a Seedance task body that already carries the render knobs
+    /// (`resolution`/`ratio`/`duration`) as top-level fields. The generated
+    /// request struct predates those fields, so the adapter serializes the
+    /// typed request and merges the knobs before sending (official Volcengine
+    /// Ark content-generation contract).
+    async fn volcengine_create_video_task_body(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<VolcengineContentGenerationTaskCreateResponse, SdkworkError> {
+        let _ = body;
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
     async fn volcengine_retrieve_video_task(
         &self,
         task_id: &str,
@@ -683,6 +699,24 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         self.client
             .videos_volcengine()
             .create_api_v3_contents_generations_task(body)
+            .await
+    }
+
+    async fn volcengine_create_video_task_body(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<VolcengineContentGenerationTaskCreateResponse, SdkworkError> {
+        // The `/volcengine` namespace must reach the gateway verbatim, exactly
+        // like `/google`: `ai_path` would prepend the OpenAI `/v1` prefix.
+        self.client
+            .http_client()
+            .post(
+                "/volcengine/api/v3/contents/generations/tasks",
+                Some(body),
+                None,
+                None,
+                Some("application/json"),
+            )
             .await
     }
 
@@ -1136,7 +1170,7 @@ pub mod test_support {
         pub volcengine_image_response: Mutex<Option<VolcengineImageGenerationResponse>>,
         pub last_volcengine_image_request: Mutex<Option<VolcengineImageGenerationRequest>>,
         pub volcengine_video_task: Mutex<Option<VolcengineContentGenerationTaskCreateResponse>>,
-        pub last_volcengine_video_request: Mutex<Option<VolcengineContentGenerationTaskCreateRequest>>,
+        pub last_volcengine_video_request: Mutex<Option<serde_json::Value>>,
     }
 
     impl Default for ScriptedGateway {
@@ -1556,9 +1590,9 @@ pub mod test_support {
                 })
         }
 
-        async fn volcengine_create_video_task(
+        async fn volcengine_create_video_task_body(
             &self,
-            body: &VolcengineContentGenerationTaskCreateRequest,
+            body: &serde_json::Value,
         ) -> Result<VolcengineContentGenerationTaskCreateResponse, SdkworkError> {
             *self.last_volcengine_video_request.lock().unwrap() = Some(body.clone());
             self.volcengine_video_task

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS generation_record (
     tenant_id TEXT NOT NULL,
     organization_id TEXT NOT NULL DEFAULT '0',
     user_id TEXT NOT NULL,
+    conversation_id TEXT,
     modality TEXT NOT NULL,
     operation_type TEXT NOT NULL,
     source_provider TEXT NOT NULL,
@@ -67,6 +68,9 @@ CREATE TABLE IF NOT EXISTS generation_dispatch_job (
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_generation_dispatch_job_idempotency
     ON generation_dispatch_job (tenant_id, source_provider, operation_type, idempotency_key);
+CREATE INDEX IF NOT EXISTS generation_record_tenant_conversation_idx
+    ON generation_record (tenant_id, conversation_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_generation_dispatch_job_lease
     ON generation_dispatch_job (status, lease_expires_at, priority, created_at);
 CREATE INDEX IF NOT EXISTS idx_generation_dispatch_job_retry
@@ -134,6 +138,7 @@ CREATE TABLE IF NOT EXISTS generation_record_projection (
     tenant_id TEXT NOT NULL,
     organization_id TEXT NOT NULL DEFAULT '0',
     user_id TEXT NOT NULL,
+    conversation_id TEXT,
     modality TEXT NOT NULL,
     operation_type TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -151,6 +156,8 @@ CREATE INDEX IF NOT EXISTS idx_generation_projection_user_updated
     ON generation_record_projection (tenant_id, user_id, updated_at DESC, generation_id);
 CREATE INDEX IF NOT EXISTS idx_generation_projection_user_status_updated
     ON generation_record_projection (tenant_id, user_id, status, updated_at DESC, generation_id);
+CREATE INDEX IF NOT EXISTS generation_projection_tenant_conversation_idx
+    ON generation_record_projection (tenant_id, conversation_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generation_projection_user_modality_updated
     ON generation_record_projection (tenant_id, user_id, modality, updated_at DESC, generation_id);
 

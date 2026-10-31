@@ -85,6 +85,17 @@
               "type": "string",
               "maxLength": 128
             }
+          },
+          {
+            "name": "conversationId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": "Restrict the page to one conversation grouping key."
           }
         ],
         "responses": {
@@ -2351,6 +2362,115 @@
         },
         "x-sdkwork-idempotent": true
       }
+    },
+    "/app/v3/api/generations/pricing/estimate": {
+      "post": {
+        "tags": [
+          "generationsApi"
+        ],
+        "operationId": "generations.pricing.estimate",
+        "summary": "Estimate generation credits.",
+        "description": "Estimates the credit (token-bank points) consumption of one generation command before it is submitted. The request mirrors the creation command's modality/operationType/model/parameters fields so the estimate prices exactly the command the client is about to submit. Priced answers carry the per-meter breakdown and the token-bank points total; a command the pricing catalog cannot price answers `priced: false` with a diagnosis instead of a fabricated number. Implemented by the composition host that owns the pricing engine (sdkwork-cloudrouter); deployments without an implementation answer 501.",
+        "x-sdkwork-owner": "sdkwork-generations",
+        "x-sdkwork-api-authority": "sdkwork-generations-app-api",
+        "security": [
+          {
+            "AuthToken": [],
+            "AccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationPricingEstimateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Credit estimate (priced or with an unpriced diagnosis).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/SdkWorkApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "data"
+                      ],
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "item"
+                          ],
+                          "properties": {
+                            "item": {
+                              "$ref": "#/components/schemas/GenerationPricingEstimate"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Problem detail.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No pricing implementation is wired on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The pricing engine is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2631,6 +2751,12 @@
           "parameters": {
             "type": "object",
             "additionalProperties": true
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Client-scoped conversation grouping key. Every command of one multi-turn conversation carries the same value, so the record list can reassemble the conversation after a reload. Opaque to the backend; never a context selector.",
+            "minLength": 1,
+            "maxLength": 128
           }
         },
         "description": "Command body for a generation creation. Tenant and organization context resolve from the authenticated session (API_SPEC §10.0/§14); clients MUST NOT supply context selector fields."
@@ -2746,6 +2872,10 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "Client-scoped conversation grouping key. Every command of one multi-turn conversation carries the same value, so the record list can reassemble the conversation after a reload. Opaque to the backend; never a context selector. Present when the creating command carried one."
           }
         }
       },
@@ -3129,6 +3259,179 @@
             }
           }
         ]
+      },
+      "GenerationPricingEstimateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "modality"
+        ],
+        "properties": {
+          "modality": {
+            "$ref": "#/components/schemas/GenerationModality"
+          },
+          "operationType": {
+            "type": "string",
+            "description": "Explicit operation the command would use. Omitted operations resolve through the modality defaults the creation endpoints apply.",
+            "enum": [
+              "text_to_image",
+              "image_edit",
+              "text_to_video",
+              "image_to_video",
+              "video_extend",
+              "avatar",
+              "motion_mimicry",
+              "text_to_music",
+              "lyrics_to_music",
+              "sound_effects",
+              "speech",
+              "transcription",
+              "translation"
+            ]
+          },
+          "model": {
+            "type": "string",
+            "description": "Model id the command would carry. Required for a priced estimate; a request without one answers `priced: false` instead of guessing a default.",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "parameters": {
+            "description": "Free-form generation parameters exactly as the command carries them, including the `generationConfig` block (aspectRatio, resolution, durationSeconds, imageCount, videoMode, ...).",
+            "type": "object",
+            "additionalProperties": true
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Prompt the command would carry. Only its character length is read, for character-metered modalities (voice/speech); the text itself is not persisted by the estimate.",
+            "maxLength": 32768
+          }
+        }
+      },
+      "GenerationPricingEstimateLine": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "meterCode",
+          "quantity",
+          "quantityBasis",
+          "quantityUnit",
+          "unitPrice",
+          "currencyCode",
+          "unitSize",
+          "amount",
+          "points",
+          "pointsMicros"
+        ],
+        "properties": {
+          "meterCode": {
+            "type": "string",
+            "description": "Billing meter code the line was priced against."
+          },
+          "quantity": {
+            "type": "string",
+            "description": "Quantity the charge scales with, as a decimal string."
+          },
+          "quantityBasis": {
+            "type": "string",
+            "enum": [
+              "requested",
+              "single_unit"
+            ],
+            "description": "`requested` when the client declared the quantity; `single_unit` when the request carries none, so one unit is shown as a lower bound."
+          },
+          "quantityUnit": {
+            "type": "string",
+            "description": "Unit the quantity is denominated in (second, character, item)."
+          },
+          "unitPrice": {
+            "type": "string",
+            "description": "Customer-charge unit price for the meter, decimal string."
+          },
+          "currencyCode": {
+            "type": "string",
+            "description": "Pricing currency of `unitPrice` (ISO 4217)."
+          },
+          "unitSize": {
+            "type": "string",
+            "description": "Divisor applied to `unitPrice` per unit (e.g. 1000000 for per-million meters)."
+          },
+          "amount": {
+            "type": "string",
+            "description": "Cash amount for the line (`unitPrice × quantity / unitSize`)."
+          },
+          "points": {
+            "type": "string",
+            "description": "Token-bank points for the line, decimal string in points."
+          },
+          "pointsMicros": {
+            "type": "integer",
+            "description": "Exact micro-points (1 point = 1e6 micro) for the line."
+          },
+          "tierCode": {
+            "type": "string",
+            "description": "Pricing tier the rate was conditioned on, when the catalog declared one."
+          }
+        }
+      },
+      "GenerationPricingEstimate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "priced",
+          "pointsTotal",
+          "pointsMicros",
+          "lines",
+          "quotedAt"
+        ],
+        "properties": {
+          "priced": {
+            "type": "boolean",
+            "description": "True when every chargeable meter resolved a rate; false answers carry `unpricedReason`."
+          },
+          "pointsTotal": {
+            "type": "string",
+            "description": "Total points for the command, decimal string."
+          },
+          "pointsMicros": {
+            "type": "integer",
+            "description": "Exact total in micro-points (1 point = 1e6 micro)."
+          },
+          "currencyCode": {
+            "type": "string",
+            "description": "Pricing currency the lines were charged in, when priced."
+          },
+          "model": {
+            "type": "string",
+            "description": "Model the estimate was priced against (echo of the request)."
+          },
+          "catalogKey": {
+            "type": "string",
+            "description": "Pricing catalog key the model resolved to (`vendor/model`)."
+          },
+          "vendorCode": {
+            "type": "string",
+            "description": "Vendor segment of the resolved catalog key."
+          },
+          "regionCode": {
+            "type": "string",
+            "description": "Billing region the rate was resolved in."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationPricingEstimateLine"
+            },
+            "description": "Per-meter breakdown, ordered by the catalog's primary-meter preference."
+          },
+          "unpricedReason": {
+            "type": "string",
+            "description": "Diagnosis when `priced` is false."
+          },
+          "quotedAt": {
+            "type": "string",
+            "description": "When the estimate was computed (RFC 3339)."
+          }
+        }
       }
     }
   }

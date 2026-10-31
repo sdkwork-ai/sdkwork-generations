@@ -217,6 +217,7 @@ mod tests {
 
     fn sample_record() -> GenerationRecord {
         GenerationRecord {
+            conversation_id: None,
             id: "gen-1".to_string(),
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
@@ -242,6 +243,7 @@ mod tests {
             parameters = serde_json::json!({ "vendor": vendor });
         }
         CreateGenerationCommandRequest {
+            conversation_id: None,
             tenant_id: "tenant-1".to_string(),
             organization_id: None,
             prompt: "thunder roll".to_string(),

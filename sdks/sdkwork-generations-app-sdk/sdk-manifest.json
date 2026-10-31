@@ -120,6 +120,6 @@
   "baseUrl": "http://127.0.0.1:18090",
   "standardProfile": "sdkwork-v3",
   "fixedSdkVersion": "0.1.0",
-  "ownerOnlyOperationCount": 21,
+  "ownerOnlyOperationCount": 22,
   "managedBy": "tools/generations_sdk_generator_runner.mjs"
 }

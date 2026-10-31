@@ -135,6 +135,7 @@ fn generations_request_context_from_web_request(
     Some(GenerationsRequestContext {
         http: GenerationsHttpRequestContext {
             tenant_id: principal.tenant_id().to_string(),
+            organization_id: principal.organization_id().map(str::to_string),
             user_id: principal.user_id().to_string(),
             trace_id: context
                 .trace_id

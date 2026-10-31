@@ -34,6 +34,7 @@ serde_json.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+time.workspace = true
 sqlx.workspace = true
 async-trait.workspace = true
 sdkwork-routes-generations-app-api.workspace = true
