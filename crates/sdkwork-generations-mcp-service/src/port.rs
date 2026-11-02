@@ -105,7 +105,8 @@ impl GenerationsMcpPort for StateGenerationsMcpPort {
         generation_id: &str,
         params: ListTimelineParams,
     ) -> Result<(Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError> {
-        GenerationsService::list_timeline(&self.state, generation_id, params).await
+        let context = self.context();
+        GenerationsService::list_timeline(&self.state, &context, generation_id, params).await
     }
 }
 

@@ -189,7 +189,7 @@ pub struct ListTimelineQuery {
 // Endpoint handlers
 // ---------------------------------------------------------------------------
 
-/// GET /app/v3/api/generations — List generation records.
+/// GET /app/v3/api/generations — List generation records owned by the caller.
 async fn list_generations(
     State(state): State<GenerationsServiceState>,
     Query(query): Query<ListGenerationsQuery>,
@@ -197,7 +197,6 @@ async fn list_generations(
 ) -> axum::Json<Value> {
     let context = context_from_extension(&extension);
     let params = crate::ports::ListGenerationsParams {
-        tenant_id: context.http.tenant_id.clone(),
         cursor: query.cursor,
         page_size: query.page_size,
         status: query.status,
@@ -207,7 +206,7 @@ async fn list_generations(
         conversation_id: query.conversation_id,
     };
 
-    match GenerationsService::list_generations(&state, context.http.tenant_id.clone(), params).await {
+    match GenerationsService::list_generations(&state, &context, params).await {
         Ok((items, page_info)) => {
             success(serde_json::json!({ "items": items, "pageInfo": page_info }))
         }
@@ -451,12 +450,7 @@ async fn list_timeline(
         page_size: query.page_size,
     };
 
-    if let Some(record) = state.repository().get(&generation_id).await.ok().flatten() {
-        crate::service::generations_service::refresh_pending_generation(&state, &context, record)
-            .await;
-    }
-
-    match GenerationsService::list_timeline(&state, &generation_id, params).await {
+    match GenerationsService::list_timeline(&state, &context, &generation_id, params).await {
         Ok((items, page_info)) => {
             success(serde_json::json!({ "items": items, "pageInfo": page_info }))
         }
@@ -467,11 +461,18 @@ async fn list_timeline(
 /// POST /app/v3/api/generations/{generationId}/cancel
 async fn cancel_generation(
     State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
     Path(generation_id): Path<String>,
     axum::Json(body): axum::Json<GenerationActionRequest>,
 ) -> axum::Json<Value> {
-    match GenerationsService::cancel_generation(&state, &generation_id, body.reason.as_deref())
-        .await
+    let context = context_from_extension(&extension);
+    match GenerationsService::cancel_generation(
+        &state,
+        &context,
+        &generation_id,
+        body.reason.as_deref(),
+    )
+    .await
     {
         Ok(record) => success(serde_json::json!({ "item": record })),
         Err(error) => failure(&error),
@@ -481,11 +482,18 @@ async fn cancel_generation(
 /// POST /app/v3/api/generations/{generationId}/retry
 async fn retry_generation(
     State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
     Path(generation_id): Path<String>,
     axum::Json(body): axum::Json<GenerationActionRequest>,
 ) -> axum::Json<Value> {
-    match GenerationsService::retry_generation(&state, &generation_id, body.reason.as_deref())
-        .await
+    let context = context_from_extension(&extension);
+    match GenerationsService::retry_generation(
+        &state,
+        &context,
+        &generation_id,
+        body.reason.as_deref(),
+    )
+    .await
     {
         Ok(record) => success(serde_json::json!({ "item": record })),
         Err(error) => failure(&error),
@@ -495,10 +503,12 @@ async fn retry_generation(
 /// POST /app/v3/api/generations/{generationId}/favorite
 async fn favorite_generation(
     State(state): State<GenerationsServiceState>,
+    Extension(extension): Extension<GenerationsRequestContext>,
     Path(generation_id): Path<String>,
     axum::Json(body): axum::Json<FavoriteGenerationRequest>,
 ) -> axum::Json<Value> {
-    match GenerationsService::favorite_generation(&state, &generation_id, &body).await {
+    let context = context_from_extension(&extension);
+    match GenerationsService::favorite_generation(&state, &context, &generation_id, &body).await {
         Ok(record) => success(serde_json::json!({ "item": record })),
         Err(error) => failure(&error),
     }

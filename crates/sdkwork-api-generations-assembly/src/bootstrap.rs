@@ -166,9 +166,10 @@ mod repository {
     use sdkwork_intelligence_generations_service::error::GenerationsError;
     use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
     use sdkwork_intelligence_generations_service::ports::{
-        AssetPort, CreateGenerationParams, GenerationRepository, GenerationResultRepository,
-        GenerationUsageFact, GenerationUsagePort, ListGenerationsParams, ListResultsParams,
-        ListTimelineParams, TimelineRepository, UpdateGenerationProviderStateParams,
+        AssetPort, CreateGenerationParams, GenerationOwnerScope, GenerationRepository,
+        GenerationResultRepository, GenerationUsageFact, GenerationUsagePort,
+        ListGenerationsParams, ListResultsParams, ListTimelineParams, TimelineRepository,
+        UpdateGenerationProviderStateParams,
     };
 
     // -----------------------------------------------------------------------
@@ -182,6 +183,24 @@ mod repository {
     impl PostgresGenerationRepository {
         pub fn new(pool: sqlx::PgPool) -> Self {
             Self { pool }
+        }
+
+        /// Load one record by id without an owner predicate.
+        ///
+        /// Internal dispatch/refresh path only: the record was already resolved
+        /// through an owner-scoped read before provider state is written back.
+        async fn get_record(
+            &self,
+            id: &str,
+        ) -> Result<Option<GenerationRecord>, GenerationsError> {
+            let row = sqlx::query_as::<_, GenerationRecordRow>(
+                "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+            Ok(row.map(|r| r.into_record()))
         }
     }
 
@@ -246,11 +265,17 @@ mod repository {
             })
         }
 
-        async fn get(&self, id: &str) -> Result<Option<GenerationRecord>, GenerationsError> {
+        async fn get_for_owner(
+            &self,
+            scope: &GenerationOwnerScope,
+            id: &str,
+        ) -> Result<Option<GenerationRecord>, GenerationsError> {
             let row = sqlx::query_as::<_, GenerationRecordRow>(
-                "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE id = $1",
+                "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE id = $1 AND tenant_id = $2 AND user_id = $3",
             )
             .bind(id)
+            .bind(&scope.tenant_id)
+            .bind(&scope.user_id)
             .fetch_optional(&self.pool)
             .await?;
 
@@ -259,6 +284,7 @@ mod repository {
 
         async fn list(
             &self,
+            scope: &GenerationOwnerScope,
             params: ListGenerationsParams,
         ) -> Result<(Vec<GenerationRecord>, Option<String>, bool), GenerationsError> {
             let page_size = params.page_size.unwrap_or(20).min(100);
@@ -302,7 +328,8 @@ mod repository {
             // filter value binds as a parameter, so the dynamic string carries
             // no injection surface (the audit `AssertSqlSafe` asserts).
             let mut query = sqlx::query_as::<_, GenerationRecordRow>(sqlx::AssertSqlSafe(sql))
-                .bind(&params.tenant_id);
+                .bind(&scope.tenant_id)
+                .bind(&scope.user_id);
             if let Some(value) = binds.conversation_id.as_deref() {
                 query = query.bind(value);
             }
@@ -348,34 +375,37 @@ mod repository {
 
         async fn cancel(
             &self,
+            scope: &GenerationOwnerScope,
             id: &str,
             _reason: Option<&str>,
         ) -> Result<Option<GenerationRecord>, GenerationsError> {
-            let rows_affected = sqlx::query(
-                "UPDATE generation_record SET status = 'canceled', updated_at = $2 WHERE id = $1 AND status NOT IN ('succeeded', 'failed', 'canceled')"
+            sqlx::query(
+                "UPDATE generation_record SET status = 'canceled', updated_at = $4 WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND status NOT IN ('succeeded', 'failed', 'canceled')"
             )
             .bind(id)
+            .bind(&scope.tenant_id)
+            .bind(&scope.user_id)
             .bind(chrono::Utc::now())
             .execute(&self.pool)
-            .await?
-            .rows_affected();
+            .await?;
 
-            if rows_affected == 0 {
-                return self.get(id).await;
-            }
-
-            self.get(id).await
+            // Returns the record whether the transition applied or the record
+            // was already terminal; a record outside the scope resolves to None.
+            self.get_for_owner(scope, id).await
         }
 
         async fn retry(
             &self,
+            scope: &GenerationOwnerScope,
             id: &str,
             _reason: Option<&str>,
         ) -> Result<Option<GenerationRecord>, GenerationsError> {
             let rows_affected = sqlx::query(
-                "UPDATE generation_record SET status = 'queued', updated_at = $2 WHERE id = $1 AND status IN ('failed', 'canceled')"
+                "UPDATE generation_record SET status = 'queued', updated_at = $4 WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND status IN ('failed', 'canceled')"
             )
             .bind(id)
+            .bind(&scope.tenant_id)
+            .bind(&scope.user_id)
             .bind(chrono::Utc::now())
             .execute(&self.pool)
             .await?
@@ -385,18 +415,21 @@ mod repository {
                 return Ok(None);
             }
 
-            self.get(id).await
+            self.get_for_owner(scope, id).await
         }
 
         async fn set_favorite(
             &self,
+            scope: &GenerationOwnerScope,
             id: &str,
             favorite: bool,
         ) -> Result<Option<GenerationRecord>, GenerationsError> {
             let rows_affected = sqlx::query(
-                "UPDATE generation_record SET favorite = $2, updated_at = $3 WHERE id = $1"
+                "UPDATE generation_record SET favorite = $4, updated_at = $5 WHERE id = $1 AND tenant_id = $2 AND user_id = $3"
             )
             .bind(id)
+            .bind(&scope.tenant_id)
+            .bind(&scope.user_id)
             .bind(favorite)
             .bind(chrono::Utc::now())
             .execute(&self.pool)
@@ -407,7 +440,7 @@ mod repository {
                 return Ok(None);
             }
 
-            self.get(id).await
+            self.get_for_owner(scope, id).await
         }
 
         async fn update_provider_state(
@@ -445,7 +478,7 @@ mod repository {
             if result.rows_affected() == 0 {
                 return Ok(None);
             }
-            self.get(&params.id).await
+            self.get_record(&params.id).await
         }
     }
 
@@ -471,7 +504,8 @@ mod repository {
     /// Assembles the generation list SQL. Every filter is a fixed clause
     /// fragment and every value binds as a parameter — filter presence only
     /// decides which clauses and placeholder numbers appear, never the text
-    /// of a value.
+    /// of a value. The owner predicate (`tenant_id`, `user_id`) is always
+    /// present: a page only ever contains the caller's own records.
     fn assemble_generation_list_sql(
         conversation_id: bool,
         status: bool,
@@ -481,9 +515,9 @@ mod repository {
         cursor: bool,
     ) -> String {
         let mut sql = String::from(
-            "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE tenant_id = $1",
+            "SELECT id, tenant_id, organization_id, conversation_id, user_id, modality, status, operation_type, source_provider, source_job_id, prompt_preview, favorite, result_count, created_at, updated_at FROM generation_record WHERE tenant_id = $1 AND user_id = $2",
         );
-        let mut placeholder = 2usize;
+        let mut placeholder = 3usize;
         if conversation_id {
             sql.push_str(&format!(" AND conversation_id = ${placeholder}"));
             placeholder += 1;
@@ -575,32 +609,37 @@ mod repository {
     }
 
     #[test]
-    fn list_sql_without_filters_binds_tenant_and_limit_only() {
+    fn list_sql_without_filters_binds_owner_and_limit_only() {
         let sql = assemble_generation_list_sql(false, false, false, false, false, false);
-        assert!(sql.ends_with("ORDER BY created_at DESC, id DESC LIMIT $2"));
-        assert!(!sql.contains(" AND "));
+        assert!(sql.contains("WHERE tenant_id = $1 AND user_id = $2"));
+        assert!(sql.ends_with("ORDER BY created_at DESC, id DESC LIMIT $3"));
+        assert!(!sql.contains("conversation_id ="));
+        assert!(!sql.contains(" AND status ="));
+        assert!(!sql.contains(" AND modality ="));
+        assert!(!sql.contains(" AND operation_type ="));
+        assert!(!sql.contains("prompt_preview ILIKE"));
     }
 
     #[test]
     fn list_sql_numbers_every_filter_clause_in_bind_order() {
         let sql = assemble_generation_list_sql(true, true, true, true, true, true);
-        assert!(sql.contains(" AND conversation_id = $2"));
-        assert!(sql.contains(" AND status = $3"));
-        assert!(sql.contains(" AND modality = $4"));
-        assert!(sql.contains(" AND operation_type = $5"));
-        assert!(sql.contains(" AND prompt_preview ILIKE $6"));
-        assert!(sql.contains(" AND (created_at, id) < ($7::timestamptz, $8)"));
-        assert!(sql.ends_with("ORDER BY created_at DESC, id DESC LIMIT $9"));
+        assert!(sql.contains(" AND conversation_id = $3"));
+        assert!(sql.contains(" AND status = $4"));
+        assert!(sql.contains(" AND modality = $5"));
+        assert!(sql.contains(" AND operation_type = $6"));
+        assert!(sql.contains(" AND prompt_preview ILIKE $7"));
+        assert!(sql.contains(" AND (created_at, id) < ($8::timestamptz, $9)"));
+        assert!(sql.ends_with("ORDER BY created_at DESC, id DESC LIMIT $10"));
     }
 
     #[test]
     fn list_sql_keeps_clauses_absent_when_their_filter_is_off() {
         let sql = assemble_generation_list_sql(false, true, false, false, true, false);
         assert!(!sql.contains("conversation_id ="));
-        assert!(sql.contains(" AND status = $2"));
+        assert!(sql.contains(" AND status = $3"));
         assert!(!sql.contains(" AND modality"));
-        assert!(sql.contains(" AND prompt_preview ILIKE $3"));
-        assert!(sql.ends_with("LIMIT $4"));
+        assert!(sql.contains(" AND prompt_preview ILIKE $4"));
+        assert!(sql.ends_with("LIMIT $5"));
     }
 
     // -----------------------------------------------------------------------

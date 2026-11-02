@@ -36,10 +36,26 @@ pub struct CreateGenerationParams {
     pub input_asset_ids: Vec<String>,
 }
 
+/// Tenant and user that own a generation record.
+///
+/// Every app-surface read and action carries this scope, so a request can only
+/// resolve records created by its own signed-in account. Generation records are
+/// personal creative history: a tenant id alone is not an ownership boundary,
+/// because several accounts can share one tenant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationOwnerScope {
+    /// Authenticated tenant id.
+    pub tenant_id: String,
+    /// Authenticated user id.
+    pub user_id: String,
+}
+
 /// Parameters for listing generation records.
+///
+/// The owner scope travels separately from these filters so a caller cannot
+/// widen a page by supplying another tenant or user value.
 #[derive(Debug, Clone, Default)]
 pub struct ListGenerationsParams {
-    pub tenant_id: String,
     pub cursor: Option<String>,
     pub page_size: Option<i32>,
     pub status: Option<String>,
@@ -59,38 +75,49 @@ pub trait GenerationRepository: Send + Sync {
         params: CreateGenerationParams,
     ) -> Result<GenerationRecord, GenerationsError>;
 
-    /// Retrieve a generation record by id.
-    async fn get(&self, id: &str) -> Result<Option<GenerationRecord>, GenerationsError>;
+    /// Retrieve one record owned by the scoped tenant and user.
+    async fn get_for_owner(
+        &self,
+        scope: &GenerationOwnerScope,
+        id: &str,
+    ) -> Result<Option<GenerationRecord>, GenerationsError>;
 
-    /// List generation records with cursor pagination.
+    /// List records owned by the scoped tenant and user with cursor pagination.
     async fn list(
         &self,
+        scope: &GenerationOwnerScope,
         params: ListGenerationsParams,
     ) -> Result<(Vec<GenerationRecord>, Option<String>, bool), GenerationsError>;
 
-    /// Cancel a generation by id.
+    /// Cancel a generation owned by the scoped tenant and user.
     async fn cancel(
         &self,
+        scope: &GenerationOwnerScope,
         id: &str,
         reason: Option<&str>,
     ) -> Result<Option<GenerationRecord>, GenerationsError>;
 
-    /// Retry a failed or canceled generation.
+    /// Retry a failed or canceled generation owned by the scoped tenant and user.
     async fn retry(
         &self,
+        scope: &GenerationOwnerScope,
         id: &str,
         reason: Option<&str>,
     ) -> Result<Option<GenerationRecord>, GenerationsError>;
 
-    /// Set the favorite flag on a generation.
+    /// Set the favorite flag on a generation owned by the scoped tenant and user.
     async fn set_favorite(
         &self,
+        scope: &GenerationOwnerScope,
         id: &str,
         favorite: bool,
     ) -> Result<Option<GenerationRecord>, GenerationsError>;
 
     /// Persist provider-assigned state (status, source job id, result count,
     /// error) after a dispatch or retrieval. Returns the refreshed record.
+    ///
+    /// Internal dispatch/refresh path: callers already resolved the record
+    /// through an owner-scoped read, so this write stays keyed by record id.
     async fn update_provider_state(
         &self,
         params: UpdateGenerationProviderStateParams,

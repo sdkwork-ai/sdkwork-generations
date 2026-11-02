@@ -15,8 +15,8 @@ use crate::domain::pricing::{
 };
 use crate::error::GenerationsError;
 use crate::ports::{
-    AssetPort, CreateGenerationParams, GenerationDispatchOutcome, GenerationProvider,
-    GenerationRepository, GenerationResultRepository, GenerationUsageFact,
+    AssetPort, CreateGenerationParams, GenerationDispatchOutcome, GenerationOwnerScope,
+    GenerationProvider, GenerationRepository, GenerationResultRepository, GenerationUsageFact,
     GenerationUsagePort, GenerationUsageSource, ListGenerationsParams, ListResultsParams,
     ListTimelineParams, TimelineRepository, UpdateGenerationProviderStateParams,
 };
@@ -429,30 +429,32 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         id: &str,
     ) -> Result<GenerationRecord, GenerationsError> {
+        let scope = owner_scope(context);
         let record = state
             .repository
-            .get(id)
+            .get_for_owner(&scope, id)
             .await?
             .ok_or_else(|| GenerationsError::NotFound(id.to_string()))?;
         let refreshed = refresh_pending_generation(state, context, record.clone()).await;
         Ok(refreshed.unwrap_or(record))
     }
 
-    /// List generation records with cursor pagination.
+    /// List generation records owned by the authenticated user.
+    ///
+    /// The page is scoped to the caller's tenant and user id: generation
+    /// history is personal, and filtering by tenant alone showed one account's
+    /// creative sessions to every other account in the same tenant.
     pub async fn list_generations(
         state: &GenerationsServiceState,
-        tenant_id: String,
+        context: &GenerationsRequestContext,
         params: ListGenerationsParams,
     ) -> Result<(Vec<GenerationRecord>, PageInfo), GenerationsError> {
-        let params = ListGenerationsParams {
-            tenant_id,
-            ..params
-        };
-        let (items, next_cursor, has_more) = state.repository.list(params).await?;
+        let scope = owner_scope(context);
+        let (items, next_cursor, has_more) = state.repository.list(&scope, params).await?;
         Ok((items, PageInfo::cursor(next_cursor, has_more)))
     }
 
-    /// List results for a generation.
+    /// List results for a generation owned by the authenticated user.
     ///
     /// Non-terminal generations are refreshed against the dispatching provider
     /// first so newly finished async tasks return their results.
@@ -462,10 +464,14 @@ impl GenerationsService {
         generation_id: &str,
         params: ListResultsParams,
     ) -> Result<(Vec<GenerationResult>, PageInfo), GenerationsError> {
-        if let Some(record) = state.repository.get(generation_id).await? {
-            // Best effort: the stored results are returned either way.
-            let _ = refresh_pending_generation(state, context, record).await;
-        }
+        let scope = owner_scope(context);
+        let record = state
+            .repository
+            .get_for_owner(&scope, generation_id)
+            .await?
+            .ok_or_else(|| GenerationsError::NotFound(generation_id.to_string()))?;
+        // Best effort: the stored results are returned either way.
+        let _ = refresh_pending_generation(state, context, record).await;
         let params = ListResultsParams {
             generation_id: generation_id.to_string(),
             ..params
@@ -474,13 +480,21 @@ impl GenerationsService {
         Ok((items, PageInfo::cursor(next_cursor, has_more)))
     }
 
-    /// List timeline events for a generation.
+    /// List timeline events for a generation owned by the authenticated user.
     pub async fn list_timeline(
         state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
         generation_id: &str,
         params: ListTimelineParams,
     ) -> Result<(Vec<crate::domain::models::GenerationTimelineEvent>, PageInfo), GenerationsError>
     {
+        let scope = owner_scope(context);
+        let record = state
+            .repository
+            .get_for_owner(&scope, generation_id)
+            .await?
+            .ok_or_else(|| GenerationsError::NotFound(generation_id.to_string()))?;
+        let _ = refresh_pending_generation(state, context, record).await;
         let params = ListTimelineParams {
             generation_id: generation_id.to_string(),
             ..params
@@ -491,41 +505,47 @@ impl GenerationsService {
 
     // -- Actions ------------------------------------------------------------
 
-    /// Cancel a generation.
+    /// Cancel a generation owned by the authenticated user.
     pub async fn cancel_generation(
         state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
         id: &str,
         reason: Option<&str>,
     ) -> Result<GenerationRecord, GenerationsError> {
+        let scope = owner_scope(context);
         state
             .repository
-            .cancel(id, reason)
+            .cancel(&scope, id, reason)
             .await?
             .ok_or_else(|| GenerationsError::NotFound(id.to_string()))
     }
 
-    /// Retry a generation.
+    /// Retry a generation owned by the authenticated user.
     pub async fn retry_generation(
         state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
         id: &str,
         reason: Option<&str>,
     ) -> Result<GenerationRecord, GenerationsError> {
+        let scope = owner_scope(context);
         state
             .repository
-            .retry(id, reason)
+            .retry(&scope, id, reason)
             .await?
             .ok_or_else(|| GenerationsError::NotFound(id.to_string()))
     }
 
-    /// Set the favorite flag on a generation.
+    /// Set the favorite flag on a generation owned by the authenticated user.
     pub async fn favorite_generation(
         state: &GenerationsServiceState,
+        context: &GenerationsRequestContext,
         id: &str,
         request: &FavoriteGenerationRequest,
     ) -> Result<GenerationRecord, GenerationsError> {
+        let scope = owner_scope(context);
         state
             .repository
-            .set_favorite(id, request.favorite)
+            .set_favorite(&scope, id, request.favorite)
             .await?
             .ok_or_else(|| GenerationsError::NotFound(id.to_string()))
     }
@@ -533,6 +553,10 @@ impl GenerationsService {
     // -- Asset integration --------------------------------------------------
 
     /// Save a generation result to the asset catalog.
+    ///
+    /// Both the generation record and the result are resolved inside the
+    /// caller's owner scope before the asset port runs, so another account's
+    /// media can never be saved into this account's catalog.
     pub async fn save_to_assets(
         state: &GenerationsServiceState,
         context: &GenerationsRequestContext,
@@ -540,6 +564,17 @@ impl GenerationsService {
         result_id: &str,
         request: &SaveGenerationResultToAssetsRequest,
     ) -> Result<GenerationResult, GenerationsError> {
+        let scope = owner_scope(context);
+        state
+            .repository
+            .get_for_owner(&scope, generation_id)
+            .await?
+            .ok_or_else(|| GenerationsError::NotFound(generation_id.to_string()))?;
+        state
+            .result_repository
+            .get(generation_id, result_id)
+            .await?
+            .ok_or_else(|| GenerationsError::NotFound(result_id.to_string()))?;
         let result = state
             .asset_port
             .save_generation_result(generation_id, result_id, request, context)
@@ -617,6 +652,17 @@ impl GenerationsService {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/// Owner scope of the authenticated request.
+///
+/// App-surface record reads and actions are limited to this tenant/user pair;
+/// a tenant alone is not enough because accounts can share a tenant.
+fn owner_scope(context: &GenerationsRequestContext) -> GenerationOwnerScope {
+    GenerationOwnerScope {
+        tenant_id: context.http.tenant_id.clone(),
+        user_id: context.http.user_id.clone(),
+    }
+}
 
 /// Resolve a provider for the given modality and operation type.
 fn resolve_provider<'a>(

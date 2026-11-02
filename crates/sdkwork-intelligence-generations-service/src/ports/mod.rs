@@ -12,7 +12,7 @@ pub use provider::{
     GenerationUsageFact, GenerationUsagePort, GenerationUsageSource,
 };
 pub use repository::{
-    CreateGenerationParams, GenerationRepository, GenerationResultRepository,
-    ListGenerationsParams, ListResultsParams, ListTimelineParams, TimelineRepository,
-    UpdateGenerationProviderStateParams,
+    CreateGenerationParams, GenerationOwnerScope, GenerationRepository,
+    GenerationResultRepository, ListGenerationsParams, ListResultsParams, ListTimelineParams,
+    TimelineRepository, UpdateGenerationProviderStateParams,
 };

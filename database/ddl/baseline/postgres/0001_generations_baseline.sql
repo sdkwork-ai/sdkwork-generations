@@ -70,6 +70,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_generation_dispatch_job_idempotency
     ON generation_dispatch_job (tenant_id, source_provider, operation_type, idempotency_key);
 CREATE INDEX IF NOT EXISTS generation_record_tenant_conversation_idx
     ON generation_record (tenant_id, conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS generation_record_tenant_user_created_idx
+    ON generation_record (tenant_id, user_id, created_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_generation_dispatch_job_lease
     ON generation_dispatch_job (status, lease_expires_at, priority, created_at);

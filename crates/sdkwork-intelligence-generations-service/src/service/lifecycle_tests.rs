@@ -13,15 +13,16 @@ use async_trait::async_trait;
 use crate::config::GenerationsConfig;
 use crate::context::GenerationsRequestContext;
 use crate::domain::models::{
-    CreateGenerationCommandRequest, GenerationModality, GenerationRecord, GenerationResult,
-    GenerationStatus, GenerationTimelineEvent, SaveGenerationResultToAssetsRequest,
+    CreateGenerationCommandRequest, FavoriteGenerationRequest, GenerationModality,
+    GenerationRecord, GenerationResult, GenerationStatus, GenerationTimelineEvent,
+    SaveGenerationResultToAssetsRequest,
 };
 use crate::error::GenerationsError;
 use crate::ports::{
-    AssetPort, CreateGenerationParams, GenerationDispatchOutcome, GenerationProvider,
-    GenerationRepository, GenerationResultRepository, GenerationUsageFact, GenerationUsagePort,
-    ListGenerationsParams, ListResultsParams, ListTimelineParams, TimelineRepository,
-    UpdateGenerationProviderStateParams,
+    AssetPort, CreateGenerationParams, GenerationDispatchOutcome, GenerationOwnerScope,
+    GenerationProvider, GenerationRepository, GenerationResultRepository, GenerationUsageFact,
+    GenerationUsagePort, ListGenerationsParams, ListResultsParams, ListTimelineParams,
+    TimelineRepository, UpdateGenerationProviderStateParams,
 };
 use crate::service::GenerationsService;
 
@@ -72,16 +73,29 @@ impl GenerationRepository for InMemoryGenerationRepository {
         Ok(record)
     }
 
-    async fn get(&self, id: &str) -> Result<Option<GenerationRecord>, GenerationsError> {
-        Ok(self.records.lock().unwrap().get(id).cloned())
+    async fn get_for_owner(
+        &self,
+        scope: &GenerationOwnerScope,
+        id: &str,
+    ) -> Result<Option<GenerationRecord>, GenerationsError> {
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .filter(|record| {
+                record.tenant_id == scope.tenant_id && record.user_id == scope.user_id
+            })
+            .cloned())
     }
 
     async fn list(
         &self,
+        scope: &GenerationOwnerScope,
         params: ListGenerationsParams,
     ) -> Result<(Vec<GenerationRecord>, Option<String>, bool), GenerationsError> {
         // The in-memory double mirrors the Postgres filter semantics so the
-        // lifecycle tests exercise the same list contract.
+        // lifecycle tests exercise the same owner-scoped list contract.
         let cursor = params
             .cursor
             .as_deref()
@@ -89,7 +103,9 @@ impl GenerationRepository for InMemoryGenerationRepository {
         let records = self.records.lock().unwrap();
         let mut items: Vec<GenerationRecord> = records
             .values()
-            .filter(|record| record.tenant_id == params.tenant_id)
+            .filter(|record| {
+                record.tenant_id == scope.tenant_id && record.user_id == scope.user_id
+            })
             .filter(|record| {
                 params
                     .conversation_id
@@ -153,34 +169,53 @@ impl GenerationRepository for InMemoryGenerationRepository {
 
     async fn cancel(
         &self,
+        scope: &GenerationOwnerScope,
         id: &str,
         _reason: Option<&str>,
     ) -> Result<Option<GenerationRecord>, GenerationsError> {
-        if let Some(record) = self.records.lock().unwrap().get_mut(id) {
-            record.status = GenerationStatus::Canceled;
-            return Ok(Some(record.clone()));
+        let mut records = self.records.lock().unwrap();
+        let Some(record) = records.get_mut(id) else {
+            return Ok(None);
+        };
+        if record.tenant_id != scope.tenant_id || record.user_id != scope.user_id {
+            return Ok(None);
         }
-        Ok(None)
+        record.status = GenerationStatus::Canceled;
+        Ok(Some(record.clone()))
     }
 
     async fn retry(
         &self,
+        scope: &GenerationOwnerScope,
         id: &str,
         _reason: Option<&str>,
     ) -> Result<Option<GenerationRecord>, GenerationsError> {
-        Ok(self.records.lock().unwrap().get(id).cloned())
+        Ok(self
+            .records
+            .lock()
+            .unwrap()
+            .get(id)
+            .filter(|record| {
+                record.tenant_id == scope.tenant_id && record.user_id == scope.user_id
+            })
+            .cloned())
     }
 
     async fn set_favorite(
         &self,
+        scope: &GenerationOwnerScope,
         id: &str,
         favorite: bool,
     ) -> Result<Option<GenerationRecord>, GenerationsError> {
-        if let Some(record) = self.records.lock().unwrap().get_mut(id) {
-            record.favorite = favorite;
-            return Ok(Some(record.clone()));
+        let mut records = self.records.lock().unwrap();
+        let Some(record) = records.get_mut(id) else {
+            return Ok(None);
+        };
+        if record.tenant_id != scope.tenant_id || record.user_id != scope.user_id {
+            return Ok(None);
         }
-        Ok(None)
+        record.favorite = favorite;
+        Ok(Some(record.clone()))
     }
 
     async fn update_provider_state(
@@ -533,6 +568,21 @@ fn context() -> GenerationsRequestContext {
     )
 }
 
+fn other_user_context() -> GenerationsRequestContext {
+    GenerationsRequestContext::from_parts(
+        "tenant-1".to_string(),
+        "user-2".to_string(),
+        "trace-2".to_string(),
+    )
+}
+
+fn owner() -> GenerationOwnerScope {
+    GenerationOwnerScope {
+        tenant_id: "tenant-1".to_string(),
+        user_id: "user-1".to_string(),
+    }
+}
+
 fn service_state(
     providers: Vec<Box<dyn GenerationProvider>>,
 ) -> crate::service::GenerationsServiceState {
@@ -760,16 +810,18 @@ async fn failed_video_dispatch_persists_failed_record() {
 
     let records = state
         .repository()
-        .list(ListGenerationsParams {
-            tenant_id: "tenant-1".to_string(),
-            cursor: None,
-            page_size: Some(10),
-            status: None,
-            modality: Some("video".to_string()),
-            operation_type: None,
-            q: None,
-            conversation_id: None,
-        })
+        .list(
+            &owner(),
+            ListGenerationsParams {
+                cursor: None,
+                page_size: Some(10),
+                status: None,
+                modality: Some("video".to_string()),
+                operation_type: None,
+                q: None,
+                conversation_id: None,
+            },
+        )
         .await
         .expect("records listed")
         .0;
@@ -846,16 +898,18 @@ async fn conversation_grouping_reassembles_one_multi_turn_conversation() {
 
     let conversation_records = state
         .repository()
-        .list(ListGenerationsParams {
-            tenant_id: "tenant-1".to_string(),
-            cursor: None,
-            page_size: Some(10),
-            status: None,
-            modality: None,
-            operation_type: None,
-            q: None,
-            conversation_id: Some("conv-1".to_string()),
-        })
+        .list(
+            &owner(),
+            ListGenerationsParams {
+                cursor: None,
+                page_size: Some(10),
+                status: None,
+                modality: None,
+                operation_type: None,
+                q: None,
+                conversation_id: Some("conv-1".to_string()),
+            },
+        )
         .await
         .expect("conversation records listed")
         .0;
@@ -870,16 +924,18 @@ async fn conversation_grouping_reassembles_one_multi_turn_conversation() {
 
     let all_records = state
         .repository()
-        .list(ListGenerationsParams {
-            tenant_id: "tenant-1".to_string(),
-            cursor: None,
-            page_size: Some(10),
-            status: None,
-            modality: None,
-            operation_type: None,
-            q: None,
-            conversation_id: None,
-        })
+        .list(
+            &owner(),
+            ListGenerationsParams {
+                cursor: None,
+                page_size: Some(10),
+                status: None,
+                modality: None,
+                operation_type: None,
+                q: None,
+                conversation_id: None,
+            },
+        )
         .await
         .expect("all records listed")
         .0;
@@ -985,5 +1041,231 @@ async fn a_poll_without_a_vendor_update_stays_readable() {
             Err(GenerationsError::NotFound(_))
         ),
         "an id the repository does not know is still a 404"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Owner isolation
+// ---------------------------------------------------------------------------
+
+fn all_records_params() -> ListGenerationsParams {
+    ListGenerationsParams {
+        cursor: None,
+        page_size: Some(20),
+        status: None,
+        modality: None,
+        operation_type: None,
+        q: None,
+        conversation_id: None,
+    }
+}
+
+fn ids(records: &[GenerationRecord]) -> Vec<&str> {
+    records.iter().map(|record| record.id.as_str()).collect()
+}
+
+/// Generation history is personal. Filtering the list by tenant only showed one
+/// account's creative sessions to every other account in the same tenant — the
+/// client-side symptom was a brand-new account opening the image mode and
+/// finding somebody else's sessions in the sidebar.
+#[tokio::test]
+async fn list_returns_only_the_callers_own_records_within_one_tenant() {
+    let adapter = ScriptedProvider::new(
+        GenerationModality::Image,
+        "openai",
+        vec![
+            DispatchBehavior::CompleteWithImage {
+                url: "https://cdn.example/owner-image.png",
+            },
+            DispatchBehavior::CompleteWithImage {
+                url: "https://cdn.example/other-image.png",
+            },
+        ],
+        vec![],
+    );
+    let state = service_state(vec![Box::new(adapter)]);
+
+    let mine = GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &command("openai/gpt-image-2"),
+    )
+    .await
+    .expect("owner dispatch");
+    let mut other_command = command("openai/gpt-image-2");
+    other_command.conversation_id = Some("conv-other".to_string());
+    let theirs = GenerationsService::create_generation(
+        &state,
+        &other_user_context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &other_command,
+    )
+    .await
+    .expect("other user dispatch");
+
+    let owner_page = GenerationsService::list_generations(&state, &context(), all_records_params())
+        .await
+        .expect("owner list");
+    assert_eq!(
+        ids(&owner_page.0),
+        vec![mine.generation.id.as_str()],
+        "the owner's page contains only the owner's record"
+    );
+
+    let other_page =
+        GenerationsService::list_generations(&state, &other_user_context(), all_records_params())
+            .await
+            .expect("other user list");
+    assert_eq!(
+        ids(&other_page.0),
+        vec![theirs.generation.id.as_str()],
+        "another user in the same tenant sees only their own record"
+    );
+
+    // The same owner predicate applies to the conversation filter the creative
+    // app sends when it reloads one session: the other account's conversation
+    // key resolves only for that account.
+    let owner_conversation_page = GenerationsService::list_generations(
+        &state,
+        &context(),
+        ListGenerationsParams {
+            conversation_id: Some("conv-other".to_string()),
+            ..all_records_params()
+        },
+    )
+    .await
+    .expect("conversation list");
+    assert!(
+        owner_conversation_page.0.is_empty(),
+        "a conversation key belonging to another account yields no rows"
+    );
+    let other_conversation_page = GenerationsService::list_generations(
+        &state,
+        &other_user_context(),
+        ListGenerationsParams {
+            conversation_id: Some("conv-other".to_string()),
+            ..all_records_params()
+        },
+    )
+    .await
+    .expect("conversation list");
+    assert_eq!(
+        ids(&other_conversation_page.0),
+        vec![theirs.generation.id.as_str()],
+    );
+}
+
+/// Every record-scoped endpoint resolves inside the caller's owner scope, so a
+/// guessed or leaked generation id cannot read or mutate another account's
+/// generation, results, or timeline.
+#[tokio::test]
+async fn another_user_cannot_read_or_mutate_a_generation_by_id() {
+    let adapter = ScriptedProvider::new(
+        GenerationModality::Image,
+        "openai",
+        vec![DispatchBehavior::CompleteWithImage {
+            url: "https://cdn.example/private-image.png",
+        }],
+        vec![],
+    );
+    let state = service_state(vec![Box::new(adapter)]);
+    let created = GenerationsService::create_generation(
+        &state,
+        &context(),
+        GenerationModality::Image,
+        "text_to_image",
+        &command("openai/gpt-image-2"),
+    )
+    .await
+    .expect("owner dispatch");
+    let id = created.generation.id.clone();
+
+    assert!(
+        GenerationsService::get_generation(&state, &context(), &id)
+            .await
+            .is_ok(),
+        "the owner still resolves their own record"
+    );
+    assert!(matches!(
+        GenerationsService::get_generation(&state, &other_user_context(), &id).await,
+        Err(GenerationsError::NotFound(_))
+    ));
+    assert!(matches!(
+        GenerationsService::list_results(
+            &state,
+            &other_user_context(),
+            &id,
+            ListResultsParams {
+                generation_id: id.clone(),
+                cursor: None,
+                page_size: Some(20),
+            },
+        )
+        .await,
+        Err(GenerationsError::NotFound(_))
+    ));
+    assert!(matches!(
+        GenerationsService::list_timeline(
+            &state,
+            &other_user_context(),
+            &id,
+            ListTimelineParams {
+                generation_id: id.clone(),
+                cursor: None,
+                page_size: Some(20),
+            },
+        )
+        .await,
+        Err(GenerationsError::NotFound(_))
+    ));
+    assert!(matches!(
+        GenerationsService::cancel_generation(&state, &other_user_context(), &id, None).await,
+        Err(GenerationsError::NotFound(_))
+    ));
+    assert!(matches!(
+        GenerationsService::retry_generation(&state, &other_user_context(), &id, None).await,
+        Err(GenerationsError::NotFound(_))
+    ));
+    assert!(matches!(
+        GenerationsService::favorite_generation(
+            &state,
+            &other_user_context(),
+            &id,
+            &FavoriteGenerationRequest { favorite: true },
+        )
+        .await,
+        Err(GenerationsError::NotFound(_))
+    ));
+    assert!(matches!(
+        GenerationsService::save_to_assets(
+            &state,
+            &other_user_context(),
+            &id,
+            "result-1",
+            &SaveGenerationResultToAssetsRequest {
+                tenant_id: "tenant-1".to_string(),
+                collection_id: None,
+                title: None,
+                tags: None,
+            },
+        )
+        .await,
+        Err(GenerationsError::NotFound(_))
+    ));
+
+    let cross_tenant = GenerationsRequestContext::from_parts(
+        "tenant-2".to_string(),
+        "user-1".to_string(),
+        "trace-3".to_string(),
+    );
+    assert!(
+        matches!(
+            GenerationsService::get_generation(&state, &cross_tenant, &id).await,
+            Err(GenerationsError::NotFound(_))
+        ),
+        "the same user id in another tenant cannot resolve the record"
     );
 }
