@@ -122,6 +122,21 @@
           "iam:self"
         ]
       }
+    },
+    {
+      "id": "sdkwork-generations-flutter-mobile",
+      "root": "apps/sdkwork-generations-flutter-mobile",
+      "format": "flutter",
+      "runtimeTarget": "flutter-android",
+      "bindings": {},
+      "accessToken": {
+        "appId": "sdkwork-generations-flutter-mobile",
+        "tenantId": "100001",
+        "organizationId": "0",
+        "permissionScope": [
+          "iam:self"
+        ]
+      }
     }
   ]
 }
