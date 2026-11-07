@@ -3709,6 +3709,7 @@ dependencies = [
  "chrono",
  "cloudrouter-open-sdk",
  "sdkwork-intelligence-generations-service",
+ "sdkwork-utils-rust",
  "serde",
  "serde_json",
  "tokio",

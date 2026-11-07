@@ -29,7 +29,24 @@ pub use voice::VoiceGenerationProviderAdapter;
 use sdkwork_intelligence_generations_service::domain::models::{
     GenerationRecord, GenerationResult, GenerationStatus, GenerationTimelineEvent,
 };
+use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::GenerationDispatchOutcome;
+
+/// Maps a CloudRouter SDK error into a generation provider error.
+///
+/// Transport failures are reported to the registry resolver so media traffic
+/// participates in target demotion and failover. HTTP status errors (4xx/5xx)
+/// are not reported: they say the target answered, and may be an upstream
+/// provider problem rather than an unavailable gateway.
+pub(crate) fn media_sdk_error(error: cloudrouter_open_sdk::SdkworkError) -> GenerationsError {
+    if matches!(&error, cloudrouter_open_sdk::SdkworkError::Http(_)) {
+        sdkwork_utils_rust::service_base_url::report_current_registry_failure(
+            "cloudrouter",
+            &error.to_string(),
+        );
+    }
+    GenerationsError::Provider(error.to_string())
+}
 
 /// Build a dispatch outcome for a record that only changes state.
 pub(crate) fn record_outcome(record: GenerationRecord) -> GenerationDispatchOutcome {

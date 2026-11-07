@@ -13,6 +13,7 @@ description = "Vendor adapters that dispatch sdkwork-generations commands throug
 [lints]
 workspace = true
 [dependencies]
+sdkwork-utils-rust.workspace = true
 sdkwork-intelligence-generations-service.workspace = true
 cloudrouter-open-sdk.workspace = true
 async-trait.workspace = true

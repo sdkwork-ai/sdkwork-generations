@@ -422,34 +422,69 @@ pub trait MediaSdkGateway: Send + Sync {
     }
 }
 
+/// One cached SDK client plus the base URL it was built for.
+struct CachedMediaClient {
+    base_url: String,
+    client: std::sync::Arc<SdkworkAiClient>,
+}
+
 /// Production gateway backed by the generated cloudrouter Rust SDK.
+///
+/// The client is rebuilt on demand when the registry target changes, so a
+/// failed CloudRouter instance is replaced without restarting the process
+/// (`DISCOVERY_SPEC.md` 鎼?2.1). The configured URL remains the degradation
+/// fallback.
 pub struct CloudRouterMediaGateway {
-    client: SdkworkAiClient,
+    settings: GatewaySettings,
+    client_cache: std::sync::RwLock<CachedMediaClient>,
 }
 
 impl CloudRouterMediaGateway {
     /// Build a gateway from explicit settings.
     pub fn new(settings: &GatewaySettings) -> Result<Self, SdkworkError> {
-        let client = SdkworkAiClient::new_with_base_url(settings.base_url.clone())?;
-        if let Some(auth_token) = settings.auth_token.as_deref().filter(|v| !v.trim().is_empty()) {
-            client.set_auth_token(auth_token);
-        }
-        if let Some(access_token) = settings
-            .access_token
-            .as_deref()
-            .filter(|v| !v.trim().is_empty())
+        let initial = build_media_client(settings, &settings.base_url)?;
+        Ok(Self {
+            settings: settings.clone(),
+            client_cache: std::sync::RwLock::new(initial),
+        })
+    }
+
+    /// Returns the current SDK client, rebuilding it when the registry target
+    /// changed since the cached client was created.
+    fn client(&self) -> Result<std::sync::Arc<SdkworkAiClient>, SdkworkError> {
+        let desired = sdkwork_utils_rust::service_base_url::registry_base_url_or(
+            "cloudrouter",
+            &self.settings.base_url,
+        );
         {
-            client.set_access_token(access_token);
+            let cache = self
+                .client_cache
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.base_url == desired {
+                return Ok(std::sync::Arc::clone(&cache.client));
+            }
         }
-        if let Some(api_key) = settings.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
-            // The gateway's open-api face classifies an `Authorization` bearer
-            // as one half of a dual-token pair and rejects it when no
-            // Access-Token accompanies it. Server-to-server gateway API keys
-            // must therefore travel in the dedicated `X-Api-Key` header, which
-            // selects the API-key authentication branch.
-            client.set_header("X-Api-Key", api_key);
-        }
-        Ok(Self { client })
+        let fresh = build_media_client(&self.settings, &desired)?;
+        let mut cache = self
+            .client_cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.base_url = desired;
+        cache.client = fresh.client;
+        Ok(std::sync::Arc::clone(&cache.client))
+    }
+
+    /// The base URL this gateway currently targets (registry or configured).
+    ///
+    /// Refreshes the cached client first, so diagnostics observe an online
+    /// registry failover without waiting for the next media call.
+    pub fn base_url(&self) -> String {
+        let _ = self.client();
+        self.client_cache
+            .read()
+            .map(|cache| cache.base_url.clone())
+            .unwrap_or_default()
     }
 
     /// Build a gateway from environment settings.
@@ -458,20 +493,53 @@ impl CloudRouterMediaGateway {
     }
 }
 
+fn build_media_client(
+    settings: &GatewaySettings,
+    configured_base_url: &str,
+) -> Result<CachedMediaClient, SdkworkError> {
+    // DISCOVERY_SPEC 鎼?2.1: a healthy registry instance wins over the
+    // configured topology URL; the configured URL is the degradation path.
+    let base_url =
+        sdkwork_utils_rust::service_base_url::registry_base_url_or("cloudrouter", configured_base_url);
+    let client = SdkworkAiClient::new_with_base_url(base_url.clone())?;
+    if let Some(auth_token) = settings.auth_token.as_deref().filter(|v| !v.trim().is_empty()) {
+        client.set_auth_token(auth_token);
+    }
+    if let Some(access_token) = settings
+        .access_token
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+    {
+        client.set_access_token(access_token);
+    }
+    if let Some(api_key) = settings.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
+        // The gateway's open-api face classifies an `Authorization` bearer
+        // as one half of a dual-token pair and rejects it when no
+        // Access-Token accompanies it. Server-to-server gateway API keys
+        // must therefore travel in the dedicated `X-Api-Key` header, which
+        // selects the API-key authentication branch.
+        client.set_header("X-Api-Key", api_key);
+    }
+    Ok(CachedMediaClient {
+        base_url,
+        client: std::sync::Arc::new(client),
+    })
+}
+
 #[async_trait]
 impl MediaSdkGateway for CloudRouterMediaGateway {
     async fn openai_create_image_generation(
         &self,
         body: &OpenAiImageGenerationRequest,
     ) -> Result<OpenAiImageList, SdkworkError> {
-        self.client.images().create_generation(body).await
+        self.client()?.images().create_generation(body).await
     }
 
     async fn openai_create_image_edit(
         &self,
         body: &OpenAiImageEditRequest,
     ) -> Result<OpenAiImageList, SdkworkError> {
-        self.client.images().create_edit(body).await
+        self.client()?.images().create_edit(body).await
     }
 
     async fn gemini_create_image_generation(
@@ -483,14 +551,14 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         // `/google/v1beta/models/{model}:generateImages` face (the
         // `/nano-banana/...` aggregator face is contract-published but the
         // routing contract declares it unrouted). The path must reach the
-        // gateway verbatim — `ai_path` would prepend the OpenAI `/v1` prefix
+        // gateway verbatim 閳?`ai_path` would prepend the OpenAI `/v1` prefix
         // and the gateway would classify the call as an unknown
         // OpenAI-compatible route.
         let path = format!(
             "/google/v1beta/models/{}:generateImages",
             encode_path_segment(model)
         );
-        self.client
+        self.client()?
             .http_client()
             .post(&path, Some(body), None, None, Some("application/json"))
             .await
@@ -500,7 +568,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &ViduReferenceToImageRequest,
     ) -> Result<ViduImageGenerationTask, SdkworkError> {
-        self.client
+        self.client()?
             .images_vidu()
             .create_ent_v2_reference2image(body)
             .await
@@ -510,7 +578,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         task_id: &str,
     ) -> Result<ViduTaskCreationsResponse, SdkworkError> {
-        self.client.videos_vidu().list_ent_v2_tasks_creations(task_id).await
+        self.client()?.videos_vidu().list_ent_v2_tasks_creations(task_id).await
     }
 
     async fn kling_create_image_generation(
@@ -520,7 +588,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         // Vendor-native faces live under their own namespace (`/kling/...`),
         // matching the open-api contract exactly; `ai_path` would prepend the
         // OpenAI `/v1` prefix and land the call on the wrong pipeline face.
-        self.client
+        self.client()?
             .http_client()
             .post("/kling/v1/images/generations", Some(body), None, None, Some("application/json"))
             .await
@@ -530,7 +598,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         task_id: &str,
     ) -> Result<ProviderImageGenerationTask, SdkworkError> {
-        self.client
+        self.client()?
             .http_client()
             .get(
                 &format!("/kling/v1/tasks/{task_id}"),
@@ -545,9 +613,9 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         body: &VolcengineImageGenerationRequest,
     ) -> Result<VolcengineImageGenerationResponse, SdkworkError> {
         // Volcengine Ark's image surface is `/api/v3/...` under the
-        // `/volcengine` namespace — no OpenAI `/v1` prefix (`ai_path` would
+        // `/volcengine` namespace 閳?no OpenAI `/v1` prefix (`ai_path` would
         // misroute the call onto the openai pipeline face).
-        self.client
+        self.client()?
             .http_client()
             .post(
                 "/volcengine/api/v3/images/generations",
@@ -564,7 +632,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         body: &ElevenLabsSoundGenerationRequest,
         output_format: Option<&str>,
     ) -> Result<ElevenLabsSoundGenerationResponse, SdkworkError> {
-        self.client
+        self.client()?
             .audio_elevenlabs()
             .create_v1_sound_generation(body, output_format)
             .await
@@ -576,7 +644,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         body: &ElevenLabsTextToSpeechRequest,
         output_format: Option<&str>,
     ) -> Result<ElevenLabsTextToSpeechResponse, SdkworkError> {
-        self.client
+        self.client()?
             .audio_elevenlabs()
             .create_v1_text_to_speech(voice_id, body, output_format)
             .await
@@ -586,7 +654,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &OpenAiSpeechCreateRequest,
     ) -> Result<Vec<u8>, SdkworkError> {
-        self.client
+        self.client()?
             .audio_volcengine()
             .create_api_v3_audio_speech(body)
             .await
@@ -596,7 +664,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &MiniMaxMusicGenerationRequest,
     ) -> Result<MiniMaxMusicGenerationResponse, SdkworkError> {
-        self.client
+        self.client()?
             .audio_minimax()
             .create_v1_music_generation(body)
             .await
@@ -606,32 +674,32 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &OpenAiVideoCreateRequest,
     ) -> Result<OpenAiVideo, SdkworkError> {
-        self.client.video().create(body).await
+        self.client()?.video().create(body).await
     }
 
     async fn openai_retrieve_video(&self, video_id: &str) -> Result<OpenAiVideo, SdkworkError> {
-        self.client.video().retrieve(video_id).await
+        self.client()?.video().retrieve(video_id).await
     }
 
     async fn openai_create_video_extension(
         &self,
         body: &OpenAiVideoExtendRequest,
     ) -> Result<OpenAiVideo, SdkworkError> {
-        self.client.video().create_extension(body).await
+        self.client()?.video().create_extension(body).await
     }
 
     async fn kling_create_video_generation(
         &self,
         body: &KlingVideoGenerationRequest,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
-        self.client.videos_kling().create_v1_videos_generation(body).await
+        self.client()?.videos_kling().create_v1_videos_generation(body).await
     }
 
     async fn kling_retrieve_video_generation(
         &self,
         task_id: &str,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
-        self.client
+        self.client()?
             .videos_kling()
             .list_v1_videos_generations(task_id)
             .await
@@ -641,14 +709,14 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &KlingAvatarCreateRequest,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
-        self.client.videos_kling().create_v1_videos_avatar(body).await
+        self.client()?.videos_kling().create_v1_videos_avatar(body).await
     }
 
     async fn kling_create_motion_control(
         &self,
         body: &KlingMotionControlRequest,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
-        self.client
+        self.client()?
             .videos_kling()
             .create_v1_videos_motion_control(body)
             .await
@@ -658,28 +726,28 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &ViduTemplateRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
-        self.client.videos_vidu().create_ent_v2_template(body).await
+        self.client()?.videos_vidu().create_ent_v2_template(body).await
     }
 
     async fn vidu_create_text_to_video(
         &self,
         body: &ViduTextToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
-        self.client.videos_vidu().create_ent_v2_text2video(body).await
+        self.client()?.videos_vidu().create_ent_v2_text2video(body).await
     }
 
     async fn vidu_create_image_to_video(
         &self,
         body: &ViduImageToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
-        self.client.videos_vidu().create_ent_v2_img2video(body).await
+        self.client()?.videos_vidu().create_ent_v2_img2video(body).await
     }
 
     async fn vidu_create_start_end_to_video(
         &self,
         body: &ViduStartEndToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
-        self.client
+        self.client()?
             .videos_vidu()
             .create_ent_v2_start_end2video(body)
             .await
@@ -689,14 +757,14 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         task_id: &str,
     ) -> Result<ViduTaskCreationsResponse, SdkworkError> {
-        self.client.videos_vidu().list_ent_v2_tasks_creations(task_id).await
+        self.client()?.videos_vidu().list_ent_v2_tasks_creations(task_id).await
     }
 
     async fn volcengine_create_video_task(
         &self,
         body: &VolcengineContentGenerationTaskCreateRequest,
     ) -> Result<VolcengineContentGenerationTaskCreateResponse, SdkworkError> {
-        self.client
+        self.client()?
             .videos_volcengine()
             .create_api_v3_contents_generations_task(body)
             .await
@@ -708,7 +776,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
     ) -> Result<VolcengineContentGenerationTaskCreateResponse, SdkworkError> {
         // The `/volcengine` namespace must reach the gateway verbatim, exactly
         // like `/google`: `ai_path` would prepend the OpenAI `/v1` prefix.
-        self.client
+        self.client()?
             .http_client()
             .post(
                 "/volcengine/api/v3/contents/generations/tasks",
@@ -724,7 +792,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         task_id: &str,
     ) -> Result<VolcengineContentGenerationTask, SdkworkError> {
-        self.client
+        self.client()?
             .videos_volcengine()
             .list_api_v3_contents_generations_tasks(task_id)
             .await
@@ -742,7 +810,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         // The `/google` namespace must reach the gateway verbatim: `ai_path`
         // would prepend the OpenAI `/v1` prefix and the gateway would classify
         // the call as an unknown OpenAI-compatible route.
-        self.client
+        self.client()?
             .http_client()
             .post(&path, Some(body), None, None, Some("application/json"))
             .await
@@ -755,42 +823,42 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         // The long-running operation name is a relative resource path
         // (`models/{model}/operations/{id}`); its separators must survive.
         let path = format!("/google/v1beta/{}", operation_name.trim().trim_start_matches('/'));
-        self.client.http_client().get(&path, None, None).await
+        self.client()?.http_client().get(&path, None, None).await
     }
 
     async fn suno_create_music_generation(
         &self,
         body: &SunoMusicGenerationRequest,
     ) -> Result<SunoMusicGenerationResponse, SdkworkError> {
-        self.client.audio_suno().create_v1_music_generation(body).await
+        self.client()?.audio_suno().create_v1_music_generation(body).await
     }
 
     async fn suno_retrieve_music_generation(
         &self,
         task_id: &str,
     ) -> Result<SunoMusicGenerationTaskResponse, SdkworkError> {
-        self.client.audio_suno().list_v1_music_generations(task_id).await
+        self.client()?.audio_suno().list_v1_music_generations(task_id).await
     }
 
     async fn openai_create_speech(
         &self,
         body: &OpenAiSpeechCreateRequest,
     ) -> Result<Vec<u8>, SdkworkError> {
-        self.client.audio().create_speech(body).await
+        self.client()?.audio().create_speech(body).await
     }
 
     async fn openai_create_transcription(
         &self,
         body: &OpenAiAudioTranscriptionRequest,
     ) -> Result<OpenAiAudioTranscription, SdkworkError> {
-        self.client.audio().create_transcription(body).await
+        self.client()?.audio().create_transcription(body).await
     }
 
     async fn openai_create_translation(
         &self,
         body: &OpenAiAudioTranslationRequest,
     ) -> Result<OpenAiAudioTranslation, SdkworkError> {
-        self.client.audio().create_translation(body).await
+        self.client()?.audio().create_translation(body).await
     }
 }
 

@@ -105,7 +105,7 @@ mod surfaces {
             .gateway
             .elevenlabs_create_sound_generation(&request, Some(&output_format))
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
 
         let url = response
             .audio_url

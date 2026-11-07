@@ -136,7 +136,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .gateway
                     .openai_retrieve_video(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 Ok(Some(outcome_from_openai_video(record, &video)))
             }
             "nano-banana" | "veo" | "google" | "gemini" => {
@@ -144,7 +144,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .gateway
                     .gemini_retrieve_video_operation(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 Ok(Some(outcome_from_gemini_operation(record, &operation, &inputs)))
             }
             "kling" => {
@@ -152,7 +152,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .gateway
                     .kling_retrieve_video_generation(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 Ok(Some(outcome_from_media_task(
                     record,
                     "kling",
@@ -168,7 +168,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .gateway
                     .vidu_retrieve_video_creations(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 let results = vidu_results(record, &task);
                 let usage = usage_from_vidu_creations("vidu", &inputs, &task);
                 Ok(Some(match status_from_vendor(task.state.as_deref()) {
@@ -186,7 +186,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .gateway
                     .volcengine_retrieve_video_task(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 let media = task
                     .result
                     .as_ref()
@@ -237,7 +237,7 @@ async fn dispatch_openai(
             .gateway
             .openai_create_video_extension(&request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         return Ok(outcome_from_openai_video(record, &video));
     }
     if record.operation_type == "image_to_video" && inputs.first_reference_image().is_none() {
@@ -258,7 +258,7 @@ async fn dispatch_openai(
         .gateway
         .openai_create_video(&request)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     Ok(outcome_from_openai_video(record, &video))
 }
 
@@ -294,7 +294,7 @@ async fn dispatch_gemini(
         .gateway
         .gemini_create_video_generation(&model, &request)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     Ok(outcome_from_gemini_operation(record, &operation, inputs))
 }
 
@@ -380,7 +380,7 @@ async fn dispatch_kling(
         .gateway
         .kling_create_video_generation(&request)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     finish_media_task_dispatch(
         record,
         "kling",
@@ -393,7 +393,7 @@ async fn dispatch_kling(
 }
 
 /// Kling avatar (digital human): character image + driving audio (URL or tts
-/// text) → talking video task.
+/// text) 鈫?talking video task.
 async fn dispatch_kling_avatar(
     adapter: &VideoGenerationProviderAdapter,
     record: &GenerationRecord,
@@ -431,7 +431,7 @@ async fn dispatch_kling_avatar(
         .gateway
         .kling_create_avatar(&request)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     finish_media_task_dispatch(
         record,
         "kling",
@@ -444,7 +444,7 @@ async fn dispatch_kling_avatar(
 }
 
 /// Kling motion control (motion mimicry): character image + performance
-/// reference video → video task.
+/// reference video 鈫?video task.
 async fn dispatch_kling_motion_control(
     adapter: &VideoGenerationProviderAdapter,
     record: &GenerationRecord,
@@ -472,7 +472,7 @@ async fn dispatch_kling_motion_control(
         .gateway
         .kling_create_motion_control(&request)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     finish_media_task_dispatch(
         record,
         "kling",
@@ -485,7 +485,7 @@ async fn dispatch_kling_motion_control(
 }
 
 /// Vidu motion-sync template (motion mimicry): character images + motion
-/// reference videos → video task.
+/// reference videos 鈫?video task.
 async fn dispatch_vidu_motion_sync(
     adapter: &VideoGenerationProviderAdapter,
     record: &GenerationRecord,
@@ -518,7 +518,7 @@ async fn dispatch_vidu_motion_sync(
         .gateway
         .vidu_create_template(&request)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     let Some(task_id) = task.task_id.as_deref().filter(|value| !value.trim().is_empty()) else {
         return Err(GenerationsError::Provider(
             "vidu task response is missing task_id".to_string(),
@@ -550,7 +550,7 @@ async fn dispatch_vidu(
                 .gateway
                 .vidu_create_text_to_video(&request)
                 .await
-                .map_err(|error| GenerationsError::Provider(error.to_string()))?
+                .map_err(crate::media_sdk_error)?
         }
         "image_to_video" => {
             if inputs.reference_images.is_empty() {
@@ -574,7 +574,7 @@ async fn dispatch_vidu(
                 .gateway
                 .vidu_create_image_to_video(&request)
                 .await
-                .map_err(|error| GenerationsError::Provider(error.to_string()))?
+                .map_err(crate::media_sdk_error)?
         }
         other => {
             if other != "video_extend" {
@@ -622,7 +622,7 @@ async fn dispatch_vidu(
                 .gateway
                 .vidu_create_start_end_to_video(&request)
                 .await
-                .map_err(|error| GenerationsError::Provider(error.to_string()))?
+                .map_err(crate::media_sdk_error)?
         }
     };
     let Some(task_id) = task.task_id.as_deref().filter(|value| !value.trim().is_empty()) else {
@@ -695,7 +695,7 @@ async fn dispatch_volcengine(
         .gateway
         .volcengine_create_video_task_body(&body)
         .await
-        .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+        .map_err(crate::media_sdk_error)?;
     let Some(task_id) = response
         .task_id
         .as_deref()
@@ -1112,7 +1112,7 @@ mod video_lifecycle_tests {
         let mut command = command("kling/kling-ai-avatar-v2");
         command.parameters = Some(serde_json::json!({
             "referenceImages": [{ "url": "https://cdn.example/presenter.jpg" }],
-            "audioText": "大家好,欢迎收看本期节目",
+            "audioText": "澶у濂?娆㈣繋鏀剁湅鏈湡鑺傜洰",
             "voiceId": "zh-female-1"
         }));
         let outcome = provider
@@ -1135,7 +1135,7 @@ mod video_lifecycle_tests {
         assert_eq!(request.voice_mode.as_deref(), Some("tts"));
         assert_eq!(
             request.text.as_deref(),
-            Some("大家好,欢迎收看本期节目")
+            Some("澶у濂?娆㈣繋鏀剁湅鏈湡鑺傜洰")
         );
         assert_eq!(request.audio_url, None);
         assert_eq!(request.voice_id.as_deref(), Some("zh-female-1"));
@@ -1409,7 +1409,7 @@ mod video_lifecycle_tests {
             .clone()
             .expect("seedance request captured");
         // The PC spells resolution "1080P"; the vendor contract and the
-        // pricing catalog spell it "1080p" — the adapter normalizes.
+        // pricing catalog spell it "1080p" 鈥?the adapter normalizes.
         assert_eq!(request["resolution"], serde_json::json!("1080p"));
         assert_eq!(request["ratio"], serde_json::json!("16:9"));
         assert_eq!(request["duration"], serde_json::json!(4));

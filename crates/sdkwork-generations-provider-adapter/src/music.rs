@@ -1,7 +1,7 @@
 //! Music generation vendor adapters.
 //!
 //! Music is vendor-unified like image generation: one adapter dispatching to
-//! per-vendor surfaces — Suno task-style music generation (create + polled
+//! per-vendor surfaces 鈥?Suno task-style music generation (create + polled
 //! retrieve) and MiniMax synchronous music generation (`/v1/music_generation`
 //! with url output).
 
@@ -93,7 +93,7 @@ impl GenerationProvider for MusicGenerationProviderAdapter {
             .gateway
             .suno_retrieve_music_generation(task_id)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         let status = status_from_vendor(task.status.as_deref());
         match status {
             GenerationStatus::Succeeded => {
@@ -149,7 +149,7 @@ mod surfaces {
             .gateway
             .suno_create_music_generation(&request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         let Some(task_id) = response
             .task_id
             .as_deref()
@@ -195,7 +195,7 @@ mod surfaces {
             .gateway
             .minimax_create_music_generation(&request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         if let Some(base) = response.base_resp.as_ref() {
             if let Some(code) = base.status_code {
                 if code != 0 {

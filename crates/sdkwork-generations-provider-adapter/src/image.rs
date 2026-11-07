@@ -111,7 +111,7 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
                     .gateway
                     .kling_retrieve_image_generation(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 Ok(Some(self::surfaces::outcome_from_provider_task(
                     record,
                     &inputs,
@@ -128,7 +128,7 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
                     .gateway
                     .vidu_retrieve_image_creations(task_id)
                     .await
-                    .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                    .map_err(crate::media_sdk_error)?;
                 let mut results = Vec::new();
                 for creation in task.creations.iter().flatten() {
                     if let Some(url) = creation
@@ -180,7 +180,7 @@ mod surfaces {
                 .gateway
                 .openai_create_image_edit(&request)
                 .await
-                .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                .map_err(crate::media_sdk_error)?;
             Ok(finish_outcome(
                 record,
                 list.data
@@ -202,7 +202,7 @@ mod surfaces {
                 .gateway
                 .openai_create_image_generation(&request)
                 .await
-                .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+                .map_err(crate::media_sdk_error)?;
             Ok(finish_outcome(
                 record,
                 list.data
@@ -228,7 +228,7 @@ mod surfaces {
         // the create response instead of a vendor task id.
         //
         // Gemini instances accept base64-encoded reference bytes only, while
-        // the command plane carries image URLs — reference-conditioned
+        // the command plane carries image URLs 鈥?reference-conditioned
         // commands cannot be translated faithfully and fail honestly instead
         // of silently dropping the references.
         if !inputs.reference_images.is_empty() {
@@ -252,7 +252,7 @@ mod surfaces {
             .gateway
             .gemini_create_image_generation(&inputs.model, &request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         if let Some(error) = response.error.as_ref() {
             return Err(GenerationsError::Provider(crate::task_error_message(
                 error,
@@ -310,7 +310,7 @@ mod surfaces {
             .gateway
             .vidu_create_reference_to_image(&request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         Ok(pending_outcome(
             record,
             task.task_id.as_deref().unwrap_or_default(),
@@ -352,7 +352,7 @@ mod surfaces {
             .gateway
             .kling_create_image_generation(&request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         finish_task_dispatch(record, inputs, "kling", task.task_id.as_deref().or(task.id.as_deref()), task.status.as_deref().or(task.state.as_deref()), task.images.clone().unwrap_or_default(), task.error.as_ref().map(crate::task_error_message))
     }
 
@@ -375,7 +375,7 @@ mod surfaces {
             .gateway
             .volcengine_create_image_generation(&request)
             .await
-            .map_err(|error| GenerationsError::Provider(error.to_string()))?;
+            .map_err(crate::media_sdk_error)?;
         let mut usage = GenerationUsage::new("volcengine");
         usage.model = Some(model_or_default(inputs, "doubao-seedream"));
         usage.image_count = response
