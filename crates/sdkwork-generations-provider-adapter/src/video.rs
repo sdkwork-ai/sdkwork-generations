@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
-    KlingAvatarCreateRequest, KlingMotionControlRequest, KlingVideoGenerationRequest,
+    ArkImageSource, KlingAvatarCreateRequest, KlingMotionControlRequest, KlingVideoGenerationRequest,
     OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia,
-    ViduImageToVideoRequest, ViduStartEndToVideoRequest, ViduTemplateRequest,
+    ViduImageToVideoRequest, ViduStartEndToVideoRequest, ViduTemplateRequest, ViduTemplateTask,
     ViduTextToVideoRequest, VolcengineContentGenerationTaskCreateRequest, VolcengineContentPart,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
@@ -188,16 +188,21 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .await
                     .map_err(crate::media_sdk_error)?;
                 let media = task
-                    .result
+                    .content
                     .as_ref()
-                    .and_then(|result| result.videos.clone())
-                    .or_else(|| task.videos.clone())
+                    .and_then(|content| content.video_url.clone())
+                    .map(|url| {
+                        vec![ProviderGeneratedMedia {
+                            url: Some(url),
+                            ..Default::default()
+                        }]
+                    })
                     .unwrap_or_default();
                 Ok(Some(outcome_from_media_task(
                     record,
                     "volcengine",
-                    task.task_id.as_deref().or(task.id.as_deref()),
-                    task.status.as_deref().or(task.state.as_deref()),
+                    task.id.as_deref(),
+                    task.status.as_deref(),
                     media,
                     task.error.as_ref().map(crate::task_error_message),
                     task.model.as_deref(),
@@ -225,13 +230,12 @@ async fn dispatch_openai(
             ));
         };
         let request = OpenAiVideoExtendRequest {
-            image: inputs.first_reference_image(),
-            metadata: None,
-            model: (!inputs.model.is_empty()).then(|| inputs.model.clone()),
-            prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
-            seconds: inputs.duration_seconds.map(|value| value as i64),
-            size: inputs.size.clone(),
-            video: Some(source_video),
+            prompt: inputs.prompt.clone(),
+            video: source_video,
+            seconds: inputs
+                .duration_seconds
+                .map(|value| (value as i64).to_string())
+                .unwrap_or_else(|| "4".to_string()),
         };
         let video = adapter
             .gateway
@@ -246,13 +250,15 @@ async fn dispatch_openai(
         ));
     }
     let request = OpenAiVideoCreateRequest {
-        image: inputs.first_reference_image(),
-        metadata: None,
-        model: model_or_default(inputs, "sora-2"),
         prompt: inputs.prompt.clone(),
-        seconds: inputs.duration_seconds.map(|value| value as i64),
+        model: Some(model_or_default(inputs, "sora-2")),
+        input_reference: inputs
+            .first_reference_image()
+            .map(|url| std::collections::HashMap::from([("image_url".to_string(), url)])),
+        seconds: inputs
+            .duration_seconds
+            .map(|value| (value as i64).to_string()),
         size: inputs.size.clone(),
-        video: None,
     };
     let video = adapter
         .gateway
@@ -512,7 +518,8 @@ async fn dispatch_vidu_motion_sync(
         images: inputs.reference_images.clone(),
         payload: None,
         template,
-        video_urls: inputs.reference_videos.clone(),
+        video_urls: Some(inputs.reference_videos.clone()),
+        ..Default::default()
     };
     let task = adapter
         .gateway
@@ -540,11 +547,11 @@ async fn dispatch_vidu(
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
                 model: model.clone(),
-                movement_amplitude: None,
                 payload: None,
                 prompt: inputs.prompt.clone(),
                 resolution: inputs.resolution.clone(),
                 seed: inputs.seed,
+                ..Default::default()
             };
             adapter
                 .gateway
@@ -559,16 +566,15 @@ async fn dispatch_vidu(
                 ));
             }
             let request = ViduImageToVideoRequest {
-                aspect_ratio: inputs.aspect_ratio.clone(),
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
                 images: inputs.reference_images.clone(),
                 model: model.clone(),
-                movement_amplitude: None,
                 payload: None,
                 prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
                 resolution: inputs.resolution.clone(),
                 seed: inputs.seed,
+                ..Default::default()
             };
             adapter
                 .gateway
@@ -607,16 +613,15 @@ async fn dispatch_vidu(
                 ));
             };
             let request = ViduStartEndToVideoRequest {
-                aspect_ratio: inputs.aspect_ratio.clone(),
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
                 images: vec![start_frame, end_frame],
                 model: model.clone(),
-                movement_amplitude: None,
                 payload: None,
                 prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
                 resolution: inputs.resolution.clone(),
                 seed: inputs.seed,
+                ..Default::default()
             };
             adapter
                 .gateway
@@ -646,25 +651,24 @@ async fn dispatch_volcengine(
         .iter()
         .filter(|value| !value.trim().is_empty())
         .map(|reference| VolcengineContentPart {
-            file_id: None,
-            image_url: Some(reference.clone()),
-            text: None,
-            video_url: None,
+            image_url: Some(ArkImageSource {
+                url: reference.clone(),
+            }),
+            role: Some("reference_image".to_string()),
             r#type: "image_url".to_string(),
+            ..Default::default()
         })
         .collect();
     content.push(VolcengineContentPart {
-        file_id: None,
-        image_url: None,
         text: Some(inputs.prompt.clone()),
-        video_url: None,
         r#type: "text".to_string(),
+        ..Default::default()
     });
     let request = VolcengineContentGenerationTaskCreateRequest {
         callback_url: None,
         content,
-        metadata: None,
         model: model_or_default(inputs, "doubao-seedance-1-0-lite-t2v-250428"),
+        ..Default::default()
     };
     let mut body = serde_json::to_value(&request)
         .map_err(|error| GenerationsError::Internal(format!("seedance request failed to serialize: {error}")))?;
@@ -697,9 +701,8 @@ async fn dispatch_volcengine(
         .await
         .map_err(crate::media_sdk_error)?;
     let Some(task_id) = response
-        .task_id
+        .id
         .as_deref()
-        .or(response.id.as_deref())
         .filter(|value| !value.trim().is_empty())
     else {
         return Err(GenerationsError::Provider(
@@ -876,7 +879,7 @@ mod video_lifecycle_tests {
     use std::sync::Arc;
 
     use cloudrouter_open_sdk::models::{
-        KlingVideoGenerationTask, OpenAiVideo, ProviderGeneratedMedia, ViduVideoGenerationTask,
+        KlingVideoGenerationTask, OpenAiVideo, ProviderGeneratedMedia, ViduTemplateTask,
         VolcengineContentGenerationTaskCreateResponse,
     };
     use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
@@ -1192,7 +1195,7 @@ mod video_lifecycle_tests {
     #[tokio::test]
     async fn vidu_motion_sync_maps_template_images_and_videos() {
         let gateway = Arc::new(ScriptedGateway::default());
-        *gateway.vidu_template_create_task.lock().unwrap() = Some(ViduVideoGenerationTask {
+        *gateway.vidu_template_create_task.lock().unwrap() = Some(ViduTemplateTask {
             task_id: Some("vidu-motion-1".to_string()),
             state: Some("created".to_string()),
             ..Default::default()
@@ -1219,7 +1222,10 @@ mod video_lifecycle_tests {
             .expect("vidu template request captured");
         assert_eq!(request.template, "motion_control_2.5");
         assert_eq!(request.images, vec!["https://cdn.example/person.png"]);
-        assert_eq!(request.video_urls, vec!["https://cdn.example/dance.mp4"]);
+        assert_eq!(
+            request.video_urls.as_deref(),
+            Some(["https://cdn.example/dance.mp4"].map(str::to_string).as_slice())
+        );
     }
 
     #[tokio::test]
@@ -1383,7 +1389,7 @@ mod video_lifecycle_tests {
         let gateway = Arc::new(ScriptedGateway::default());
         *gateway.volcengine_video_task.lock().unwrap() =
             Some(VolcengineContentGenerationTaskCreateResponse {
-                task_id: Some("seedance-task-2".to_string()),
+                id: Some("seedance-task-2".to_string()),
                 ..VolcengineContentGenerationTaskCreateResponse::default()
             });
         let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
@@ -1420,7 +1426,7 @@ mod video_lifecycle_tests {
         let gateway = Arc::new(ScriptedGateway::default());
         *gateway.volcengine_video_task.lock().unwrap() =
             Some(VolcengineContentGenerationTaskCreateResponse {
-                task_id: Some("seedance-task-1".to_string()),
+                id: Some("seedance-task-1".to_string()),
                 ..VolcengineContentGenerationTaskCreateResponse::default()
             });
         let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
@@ -1453,7 +1459,7 @@ mod video_lifecycle_tests {
             .expect("content array")
             .iter()
             .filter(|part| part["type"] == "image_url")
-            .filter_map(|part| part["image_url"].as_str())
+            .filter_map(|part| part["image_url"]["url"].as_str())
             .collect();
         assert_eq!(
             image_parts,

@@ -95,7 +95,7 @@ mod surfaces {
             .clone()
             .unwrap_or_else(|| DEFAULT_SOUND_OUTPUT_FORMAT.to_string());
         let request = ElevenLabsSoundGenerationRequest {
-            model_id: model_or_default(inputs, DEFAULT_SOUND_EFFECT_MODEL),
+            model_id: Some(model_or_default(inputs, DEFAULT_SOUND_EFFECT_MODEL)),
             text: inputs.prompt.clone(),
             duration_seconds: inputs.duration_seconds,
             prompt_influence: inputs.cfg_scale,

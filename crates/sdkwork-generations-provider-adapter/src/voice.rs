@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
-    ElevenLabsTextToSpeechRequest, OpenAiAudioTranscriptionRequest, OpenAiAudioTranslationRequest,
+    ElevenLabsTextToSpeechRequest, ElevenLabsVoiceSettings, OpenAiAudioTranscriptionRequest,
+    OpenAiAudioTranslationRequest,
     OpenAiFileReferenceInput, OpenAiSpeechCreateRequest,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
@@ -104,11 +105,11 @@ mod surfaces {
         let model = model_or_default(inputs, "gpt-4o-mini-tts");
         let request = OpenAiSpeechCreateRequest {
             input: inputs.prompt.clone(),
-            metadata: None,
             model: model.clone(),
             response_format: inputs.response_format.clone(),
             speed: inputs.speed,
             voice: inputs.voice.clone().unwrap_or_else(|| "alloy".to_string()),
+            ..Default::default()
         };
         let bytes = speech_bytes(
             adapter
@@ -144,9 +145,10 @@ mod surfaces {
             })?;
         let model = model_or_default(inputs, "eleven_multilingual_v2");
         let request = ElevenLabsTextToSpeechRequest {
-            model_id: model.clone(),
+            model_id: Some(model.clone()),
             text: inputs.prompt.clone(),
             voice_settings: voice_settings(inputs),
+            ..Default::default()
         };
         let response = adapter
             .gateway
@@ -184,7 +186,6 @@ mod surfaces {
         let model = model_or_default(inputs, "doubao-tts");
         let request = OpenAiSpeechCreateRequest {
             input: inputs.prompt.clone(),
-            metadata: None,
             model: model.clone(),
             // Ark speech accepts the OpenAI response_format/speed fields; the
             // speed ratio mirrors the shared speech speed parameter.
@@ -195,6 +196,7 @@ mod surfaces {
                 .clone()
                 .or_else(|| inputs.voice_id.clone())
                 .unwrap_or_else(|| "zh_female_cancan_mars".to_string()),
+            ..Default::default()
         };
         let bytes = speech_bytes(adapter.gateway.volcengine_create_speech(&request).await)?;
         let mime = audio_mime_from_format(inputs.response_format.as_deref());
@@ -290,24 +292,19 @@ async fn dispatch_translation(
 }
 
 /// Build ElevenLabs `voice_settings` from the shared speech parameters.
-fn voice_settings(inputs: &GenerationCommandInputs) -> Option<serde_json::Value> {
-    let mut settings = serde_json::Map::new();
-    if let Some(stability) = inputs.stability {
-        settings.insert("stability".to_string(), serde_json::json!(stability));
-    }
-    if let Some(similarity) = inputs.similarity {
-        settings.insert(
-            "similarity_boost".to_string(),
-            serde_json::json!(similarity),
-        );
-    }
-    if let Some(style) = inputs.style {
-        settings.insert("style".to_string(), serde_json::json!(style));
-    }
-    if let Some(speed) = inputs.speed {
-        settings.insert("speed".to_string(), serde_json::json!(speed));
-    }
-    (!settings.is_empty()).then_some(serde_json::Value::Object(settings))
+fn voice_settings(inputs: &GenerationCommandInputs) -> Option<ElevenLabsVoiceSettings> {
+    let settings = ElevenLabsVoiceSettings {
+        stability: inputs.stability,
+        similarity_boost: inputs.similarity,
+        style: inputs.style,
+        speed: inputs.speed,
+        ..Default::default()
+    };
+    (inputs.stability.is_some()
+        || inputs.similarity.is_some()
+        || inputs.style.is_some()
+        || inputs.speed.is_some())
+    .then_some(settings)
 }
 
 fn speech_bytes(result: Result<Vec<u8>, cloudrouter_open_sdk::SdkworkError>) -> Result<Vec<u8>, GenerationsError> {
@@ -530,11 +527,11 @@ mod tests {
             .clone()
             .expect("elevenlabs speech request captured");
         assert_eq!(voice_id, "21m00Tcm4TlvDq8ikWAM");
-        assert_eq!(request.model_id, "eleven_multilingual_v2");
+        assert_eq!(request.model_id.as_deref(), Some("eleven_multilingual_v2"));
         assert_eq!(request.text, "hello world");
         let settings = request.voice_settings.expect("voice settings mapped");
-        assert_eq!(settings["stability"], serde_json::json!(0.4));
-        assert_eq!(settings["similarity_boost"], serde_json::json!(0.8));
+        assert_eq!(settings.stability, Some(0.4));
+        assert_eq!(settings.similarity_boost, Some(0.8));
     }
 
     #[tokio::test]
@@ -560,8 +557,8 @@ mod tests {
             .clone()
             .expect("elevenlabs speech request captured");
         let settings = request.voice_settings.expect("voice settings built from similarity alone");
-        assert_eq!(settings["similarity_boost"], serde_json::json!(0.9));
-        assert!(settings.get("stability").is_none());
+        assert_eq!(settings.similarity_boost, Some(0.9));
+        assert!(settings.stability.is_none());
     }
 
     #[tokio::test]

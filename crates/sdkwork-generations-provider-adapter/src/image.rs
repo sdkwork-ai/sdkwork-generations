@@ -8,9 +8,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
-    OpenAiImageEditRequest, OpenAiImageGenerationRequest,
-    OpenAiImageReferenceInputList, ProviderGeneratedMedia,
-    ViduReferenceToImageRequest,
+    OpenAiImageEditRequest, OpenAiImageGenerationRequest, OpenAiImageReferenceInput,
+    ProviderGeneratedMedia, ViduReferenceToImageRequest,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
 use sdkwork_intelligence_generations_service::domain::models::{
@@ -167,14 +166,14 @@ mod surfaces {
                 ));
             };
             let request = OpenAiImageEditRequest {
-                image: Some(OpenAiImageReferenceInputList {
+                images: vec![OpenAiImageReferenceInput {
                     additional_properties: [("url".to_string(), serde_json::json!(reference))]
                         .into_iter()
                         .collect(),
-                }),
-                mask: None,
-                model: model.clone(),
+                }],
+                model: Some(model.clone()),
                 prompt: inputs.prompt.clone(),
+                ..Default::default()
             };
             let list = adapter
                 .gateway
@@ -192,11 +191,12 @@ mod surfaces {
         } else {
             let request = OpenAiImageGenerationRequest {
                 model: model.clone(),
-                n: inputs.image_count,
+                n: inputs.image_count.map(|value| value as i64),
                 prompt: inputs.prompt.clone(),
                 quality: inputs.quality.clone(),
                 response_format: inputs.response_format.clone(),
                 size: inputs.size.clone(),
+                ..Default::default()
             };
             let list = adapter
                 .gateway
@@ -299,12 +299,12 @@ mod surfaces {
         let request = ViduReferenceToImageRequest {
             aspect_ratio: inputs.aspect_ratio.clone(),
             callback_url: None,
-            images: inputs.reference_images.clone(),
+            images: Some(inputs.reference_images.clone()),
             model: model_or_default(inputs, "viduq1-reference2image"),
             payload: None,
             prompt: inputs.prompt.clone(),
             seed: inputs.seed,
-            style: None,
+            ..Default::default()
         };
         let task = adapter
             .gateway
@@ -739,7 +739,11 @@ mod tests {
             .clone()
             .expect("openai edit request captured");
         assert_eq!(request.prompt, "a precise router diagram");
-        let reference = request.image.expect("reference rides the edit request");
+        let reference = request
+            .images
+            .first()
+            .cloned()
+            .expect("reference rides the edit request");
         assert_eq!(
             reference
                 .additional_properties
@@ -903,11 +907,14 @@ mod tests {
             .expect("vidu request captured");
         assert_eq!(request.model, "viduq1-reference2image");
         assert_eq!(
-            request.images,
-            vec![
-                "https://cdn.example/ref-1.png".to_string(),
-                "https://cdn.example/ref-2.png".to_string()
-            ]
+            request.images.as_deref(),
+            Some(
+                [
+                    "https://cdn.example/ref-1.png".to_string(),
+                    "https://cdn.example/ref-2.png".to_string()
+                ]
+                .as_slice()
+            )
         );
         assert_eq!(request.aspect_ratio.as_deref(), Some("1:1"));
         assert_eq!(request.seed, Some(42));

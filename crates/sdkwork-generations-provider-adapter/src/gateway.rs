@@ -20,7 +20,7 @@ use cloudrouter_open_sdk::models::{
     SunoMusicGenerationRequest, SunoMusicGenerationResponse, SunoMusicGenerationTaskResponse,
     ViduImageGenerationTask, ViduImageToVideoRequest, ViduReferenceToImageRequest,
     ViduStartEndToVideoRequest, ViduTaskCreationsResponse, ViduTemplateRequest,
-    ViduTextToVideoRequest, ViduVideoGenerationTask, VolcengineContentGenerationTask,
+    ViduTemplateTask, ViduTextToVideoRequest, ViduVideoGenerationTask, VolcengineContentGenerationTask,
     VolcengineContentGenerationTaskCreateRequest, VolcengineContentGenerationTaskCreateResponse,
 };
 use cloudrouter_open_sdk::{SdkworkAiClient, SdkworkError};
@@ -261,7 +261,7 @@ pub trait MediaSdkGateway: Send + Sync {
     async fn vidu_create_template(
         &self,
         body: &ViduTemplateRequest,
-    ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+    ) -> Result<ViduTemplateTask, SdkworkError> {
         let _ = body;
         Err(SdkworkError::HttpStatus {
             status: 599,
@@ -656,7 +656,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         body: &MiniMaxMusicGenerationRequest,
     ) -> Result<MiniMaxMusicGenerationResponse, SdkworkError> {
         self.client()?
-            .audio_minimax()
+            .music_minimax()
             .create_v1_music_generation(body)
             .await
     }
@@ -716,7 +716,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
     async fn vidu_create_template(
         &self,
         body: &ViduTemplateRequest,
-    ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+    ) -> Result<ViduTemplateTask, SdkworkError> {
         self.client()?.videos_vidu().create_ent_v2_template(body).await
     }
 
@@ -821,14 +821,14 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &SunoMusicGenerationRequest,
     ) -> Result<SunoMusicGenerationResponse, SdkworkError> {
-        self.client()?.audio_suno().create_v1_music_generation(body).await
+        self.client()?.music_suno().create_v1_music_generation(body).await
     }
 
     async fn suno_retrieve_music_generation(
         &self,
         task_id: &str,
     ) -> Result<SunoMusicGenerationTaskResponse, SdkworkError> {
-        self.client()?.audio_suno().list_v1_music_generations(task_id).await
+        self.client()?.music_suno().list_v1_music_generations(task_id).await
     }
 
     async fn openai_create_speech(
@@ -1204,7 +1204,7 @@ pub mod test_support {
         pub last_kling_avatar_request: Mutex<Option<KlingAvatarCreateRequest>>,
         pub kling_motion_control_create_task: Mutex<Option<KlingVideoGenerationTask>>,
         pub last_kling_motion_control_request: Mutex<Option<KlingMotionControlRequest>>,
-        pub vidu_template_create_task: Mutex<Option<ViduVideoGenerationTask>>,
+        pub vidu_template_create_task: Mutex<Option<ViduTemplateTask>>,
         pub last_vidu_template_request: Mutex<Option<ViduTemplateRequest>>,
         pub gemini_video_operation: Mutex<Option<GeminiVideoOperation>>,
         pub last_gemini_video_request: Mutex<Option<(String, GeminiVideoGenerationRequest)>>,
@@ -1443,7 +1443,7 @@ pub mod test_support {
         async fn vidu_create_template(
             &self,
             body: &ViduTemplateRequest,
-        ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+        ) -> Result<ViduTemplateTask, SdkworkError> {
             *self.last_vidu_template_request.lock().unwrap() = Some(body.clone());
             self.vidu_template_create_task
                 .lock()

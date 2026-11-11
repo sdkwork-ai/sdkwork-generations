@@ -190,6 +190,7 @@ mod surfaces {
             output_format: Some("url".to_string()),
             prompt: (!inputs.prompt.is_empty()).then(|| inputs.prompt.clone()),
             stream: None,
+            ..Default::default()
         };
         let response = adapter
             .gateway
