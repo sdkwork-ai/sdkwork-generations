@@ -133,6 +133,12 @@ pub struct GenerationCommandInputs {
     pub mode: Option<String>,
     pub cfg_scale: Option<f64>,
     pub loop_enabled: Option<bool>,
+    /// Whether the vendor should return synchronized audio (video) when the
+    /// model supports it.
+    pub audio: Option<bool>,
+    /// Precise generation mode the creative picker resolved from the catalog
+    /// model profile (`reference_to_video`, `start_end_frame`, ...).
+    pub generation_mode: Option<String>,
     pub reference_images: Vec<String>,
     pub reference_image_tail: Option<String>,
     pub reference_videos: Vec<String>,
@@ -327,6 +333,8 @@ impl GenerationCommandInputs {
                 })
                 .and_then(|config| config.get("loop"))
                 .and_then(serde_json::Value::as_bool),
+            generation_mode: string_from(&["generationMode", "generation_mode"]),
+            audio: bool_from(&["audio", "generateAudio", "generate_audio"]),
             reference_images,
             reference_image_tail: string_from(&["imageTail", "image_tail", "lastFrame"]),
             reference_videos,
@@ -348,6 +356,30 @@ impl GenerationCommandInputs {
             .iter()
             .find(|value| !value.trim().is_empty())
             .cloned()
+    }
+
+    /// Vidu resolution token for the composer's resolution tier.
+    ///
+    /// The composer offers `1K` / `2K` / `4K` image tiers, while Vidu's wire
+    /// values are `1080p` / `2K` / `4K`; video tiers already use the wire form
+    /// and pass through lowercased.
+    pub fn vidu_resolution(&self) -> Option<String> {
+        match self
+            .resolution
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("1k") | Some("1080p") => Some("1080p".to_string()),
+            Some("2k") => Some("2K".to_string()),
+            Some("4k") => Some("4K".to_string()),
+            Some("480p") => Some("480p".to_string()),
+            Some("540p") => Some("540p".to_string()),
+            Some("720p") => Some("720p".to_string()),
+            other => other.map(str::to_string),
+        }
     }
 
     /// First non-blank source video reference (`parameters.referenceVideos`,
@@ -478,6 +510,62 @@ mod tests {
 
         let inputs = GenerationCommandInputs::from_command(&command, &selection);
         assert_eq!(inputs.model, "gpt-image-2");
+    }
+
+    #[test]
+    fn vidu_resolution_maps_composer_tiers_to_wire_tokens() {
+        let resolve = |resolution: &str| {
+            let mut command = command_with_model("vidu/viduq2");
+            command.parameters = Some(serde_json::json!({
+                "generationConfig": { "resolution": resolution }
+            }));
+            let selection = resolve_vendor(&command, "vidu");
+            GenerationCommandInputs::from_command(&command, &selection).vidu_resolution()
+        };
+        assert_eq!(resolve("1K").as_deref(), Some("1080p"));
+        assert_eq!(resolve("2K").as_deref(), Some("2K"));
+        assert_eq!(resolve("4K").as_deref(), Some("4K"));
+        assert_eq!(resolve("720P").as_deref(), Some("720p"));
+        assert_eq!(resolve("1080P").as_deref(), Some("1080p"));
+    }
+
+    #[test]
+    fn command_inputs_extract_the_generation_mode() {
+        let mut command = command_with_model("vidu/viduq3");
+        command.parameters = Some(serde_json::json!({ "generationMode": "reference_to_video" }));
+        let selection = resolve_vendor(&command, "vidu");
+        let inputs = GenerationCommandInputs::from_command(&command, &selection);
+        assert_eq!(inputs.generation_mode.as_deref(), Some("reference_to_video"));
+    }
+
+    /// Every catalog vendor code the creative picker can emit must resolve to
+    /// the adapter surface that dispatches it, and the wire model must be the
+    /// vendor-stripped id.
+    #[test]
+    fn catalog_vendor_codes_map_to_their_adapter_surfaces() {
+        let table = [
+            ("openai", "openai"),
+            ("google", "nano-banana"),
+            ("kuaishou", "kling"),
+            ("vidu", "vidu"),
+            ("bytedance", "volcengine"),
+            ("suno", "suno"),
+            ("minimax", "minimax"),
+            ("elevenlabs", "elevenlabs"),
+        ];
+        for (catalog_code, adapter_vendor) in table {
+            let mut command = command_with_model(&format!("{catalog_code}/catalog-model"));
+            command.parameters = Some(serde_json::json!({ "vendor": catalog_code }));
+            let selection = resolve_vendor(&command, "openai");
+            assert_eq!(
+                selection.vendor, adapter_vendor,
+                "catalog vendor {catalog_code} must dispatch through {adapter_vendor}"
+            );
+            assert_eq!(
+                selection.model, "catalog-model",
+                "the explicit vendor strips the redundant prefix"
+            );
+        }
     }
 
     fn command_with_model(model: &str) -> CreateGenerationCommandRequest {

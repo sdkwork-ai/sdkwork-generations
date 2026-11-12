@@ -12,8 +12,9 @@ use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
     ArkImageSource, KlingAvatarCreateRequest, KlingMotionControlRequest, KlingVideoGenerationRequest,
     OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia,
-    ViduImageToVideoRequest, ViduStartEndToVideoRequest, ViduTemplateRequest, ViduTemplateTask,
-    ViduTextToVideoRequest, VolcengineContentGenerationTaskCreateRequest, VolcengineContentPart,
+    ViduImageToVideoRequest, ViduReferenceToVideoRequest, ViduStartEndToVideoRequest,
+    ViduTemplateRequest, ViduTextToVideoRequest, VolcengineContentGenerationTaskCreateRequest,
+    VolcengineContentPart,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
 use sdkwork_intelligence_generations_service::domain::models::{
@@ -258,7 +259,9 @@ async fn dispatch_openai(
         seconds: inputs
             .duration_seconds
             .map(|value| (value as i64).to_string()),
-        size: inputs.size.clone(),
+        // Sora takes an explicit pixel size, not an aspect ratio: map the
+        // composer ratio + resolution tier onto the vendor's supported sizes.
+        size: inputs.size.clone().or_else(|| openai_video_size(inputs)),
     };
     let video = adapter
         .gateway
@@ -278,9 +281,17 @@ async fn dispatch_gemini(
             "veo does not support video_extend".to_string(),
         ));
     }
-    if record.operation_type == "image_to_video" {
+    if record.operation_type == "image_to_video" || inputs.generation_mode.as_deref() == Some("image_to_video") {
         return Err(GenerationsError::InvalidInput(
             "veo image_to_video requires base64-encoded image input, which generation commands do not carry; use text_to_video".to_string(),
+        ));
+    }
+    if matches!(
+        inputs.generation_mode.as_deref(),
+        Some("reference_to_video") | Some("start_end_frame")
+    ) {
+        return Err(GenerationsError::InvalidInput(
+            "veo reference-driven video requires base64-encoded image input, which generation commands do not carry; use text_to_video".to_string(),
         ));
     }
     let model = model_or_default(inputs, "veo-3.0-generate-001");
@@ -370,14 +381,50 @@ async fn dispatch_kling(
     record: &GenerationRecord,
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    // Kling's first/last-frame surface is `image` + `image_tail`; the second
+    // catalog reference is the end frame when the caller did not send a
+    // dedicated tail. Kling has no resolution field: the render tier maps onto
+    // its `mode` (`std` = 720p, `pro` = 1080p and above).
+    let generation_mode = inputs
+        .generation_mode
+        .as_deref()
+        .unwrap_or(record.operation_type.as_str());
+    let references: Vec<String> = inputs
+        .reference_images
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .collect();
+    let image_tail = inputs
+        .reference_image_tail
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            (generation_mode == "start_end_frame")
+                .then(|| references.get(1).cloned())
+                .flatten()
+        });
+    let mode = inputs.mode.clone().or_else(|| {
+        match inputs
+            .resolution
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("720p") => Some("std".to_string()),
+            Some("1080p") | Some("2k") | Some("4k") => Some("pro".to_string()),
+            _ => None,
+        }
+    });
     let request = KlingVideoGenerationRequest {
         aspect_ratio: inputs.aspect_ratio.clone(),
         callback_url: None,
         cfg_scale: inputs.cfg_scale,
         duration: inputs.duration_seconds.map(|value| value as i64),
-        image: inputs.first_reference_image(),
-        image_tail: inputs.reference_image_tail.clone(),
-        mode: inputs.mode.clone(),
+        image: references.first().cloned(),
+        image_tail,
+        mode,
         model: (!inputs.model.is_empty()).then(|| inputs.model.clone()),
         negative_prompt: inputs.negative_prompt.clone(),
         prompt: inputs.prompt.clone(),
@@ -540,22 +587,61 @@ async fn dispatch_vidu(
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
     let model = model_or_default(inputs, "viduq1");
-    let task = match record.operation_type.as_str() {
+    // The precise catalog generation mode wins over the app API operation: the
+    // app API only routes text_to_video / image_to_video / video_extend, while
+    // Vidu exposes reference-to-video and start-end-frame surfaces of its own.
+    let mode = inputs
+        .generation_mode
+        .as_deref()
+        .unwrap_or(record.operation_type.as_str());
+    let task = match mode {
         "text_to_video" => {
             let request = ViduTextToVideoRequest {
                 aspect_ratio: inputs.aspect_ratio.clone(),
+                audio: inputs.audio,
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
                 model: model.clone(),
                 payload: None,
                 prompt: inputs.prompt.clone(),
-                resolution: inputs.resolution.clone(),
+                resolution: inputs.vidu_resolution(),
                 seed: inputs.seed,
                 ..Default::default()
             };
             adapter
                 .gateway
                 .vidu_create_text_to_video(&request)
+                .await
+                .map_err(crate::media_sdk_error)?
+        }
+        "reference_to_video" => {
+            let references: Vec<String> = inputs
+                .reference_images
+                .iter()
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+                .collect();
+            if references.is_empty() {
+                return Err(GenerationsError::InvalidInput(
+                    "vidu reference_to_video requires at least one reference image".to_string(),
+                ));
+            }
+            let request = ViduReferenceToVideoRequest {
+                aspect_ratio: inputs.aspect_ratio.clone(),
+                audio: inputs.audio,
+                callback_url: None,
+                duration: inputs.duration_seconds.map(|value| value as i64),
+                images: references,
+                model: model.clone(),
+                payload: None,
+                prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
+                resolution: inputs.vidu_resolution(),
+                seed: inputs.seed,
+                ..Default::default()
+            };
+            adapter
+                .gateway
+                .vidu_create_reference_to_video(&request)
                 .await
                 .map_err(crate::media_sdk_error)?
         }
@@ -566,13 +652,14 @@ async fn dispatch_vidu(
                 ));
             }
             let request = ViduImageToVideoRequest {
+                audio: inputs.audio,
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
                 images: inputs.reference_images.clone(),
                 model: model.clone(),
                 payload: None,
                 prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
-                resolution: inputs.resolution.clone(),
+                resolution: inputs.vidu_resolution(),
                 seed: inputs.seed,
                 ..Default::default()
             };
@@ -583,16 +670,13 @@ async fn dispatch_vidu(
                 .map_err(crate::media_sdk_error)?
         }
         other => {
-            if other != "video_extend" {
+            if other != "video_extend" && other != "start_end_frame" {
                 return Err(GenerationsError::InvalidInput(format!(
-                    "vidu does not support operation {other:?}"
+                    "vidu does not support generation mode {other:?}"
                 )));
             }
             // Vidu's start-end surface carries both frames in one list:
-            // `images` is documented as "Start and end image URLs". The
-            // previous implementation popped the last entry and discarded it,
-            // so the request only ever carried the start frame and the caller's
-            // end frame never reached Vidu.
+            // `images` is documented as "Start and end image URLs".
             let frames: Vec<String> = inputs
                 .reference_images
                 .iter()
@@ -613,13 +697,14 @@ async fn dispatch_vidu(
                 ));
             };
             let request = ViduStartEndToVideoRequest {
+                audio: inputs.audio,
                 callback_url: None,
                 duration: inputs.duration_seconds.map(|value| value as i64),
                 images: vec![start_frame, end_frame],
                 model: model.clone(),
                 payload: None,
                 prompt: Some(inputs.prompt.clone()).filter(|value| !value.is_empty()),
-                resolution: inputs.resolution.clone(),
+                resolution: inputs.vidu_resolution(),
                 seed: inputs.seed,
                 ..Default::default()
             };
@@ -643,22 +728,90 @@ async fn dispatch_volcengine(
     record: &GenerationRecord,
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
-    // Seedance's `content` array carries every reference image as its own
-    // `image_url` part ahead of the prompt text; forwarding only the first
-    // reference silently dropped the rest.
-    let mut content: Vec<VolcengineContentPart> = inputs
+    // Seedance's `content` array carries every media reference as its own part
+    // ahead of the prompt text. The `role` decides what the reference means:
+    // first/last-frame tasks must mark the frames, while reference-to-video
+    // tasks send every image as `reference_image`.
+    let references: Vec<String> = inputs
         .reference_images
         .iter()
         .filter(|value| !value.trim().is_empty())
-        .map(|reference| VolcengineContentPart {
+        .cloned()
+        .collect();
+    let generation_mode = inputs
+        .generation_mode
+        .as_deref()
+        .unwrap_or(record.operation_type.as_str());
+    let mut content: Vec<VolcengineContentPart> = Vec::new();
+    let push_image = |reference: &str, role: &str, content: &mut Vec<VolcengineContentPart>| {
+        content.push(VolcengineContentPart {
             image_url: Some(ArkImageSource {
-                url: reference.clone(),
+                url: reference.to_string(),
             }),
-            role: Some("reference_image".to_string()),
+            role: Some(role.to_string()),
             r#type: "image_url".to_string(),
             ..Default::default()
-        })
-        .collect();
+        });
+    };
+    match generation_mode {
+        "start_end_frame" => {
+            let start = references.first().cloned();
+            let end = inputs
+                .reference_image_tail
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| references.get(1).cloned());
+            match (start, end) {
+                (Some(start), Some(end)) => {
+                    push_image(&start, "first_frame", &mut content);
+                    push_image(&end, "last_frame", &mut content);
+                }
+                _ => {
+                    return Err(GenerationsError::InvalidInput(
+                        "seedance start_end_frame requires first and last frame references".to_string(),
+                    ))
+                }
+            }
+        }
+        "reference_to_video" => {
+            if references.is_empty() {
+                return Err(GenerationsError::InvalidInput(
+                    "seedance reference_to_video requires at least one reference image".to_string(),
+                ));
+            }
+            for reference in &references {
+                push_image(reference, "reference_image", &mut content);
+            }
+        }
+        _ => {
+            // A precise `image_to_video` command marks its single source frame;
+            // commands that name no generation mode keep the historical shape
+            // (every reference forwarded as `reference_image`).
+            if inputs.generation_mode.as_deref() == Some("image_to_video") {
+                if let Some(first) = references.first() {
+                    push_image(first, "first_frame", &mut content);
+                }
+            } else {
+                for reference in &references {
+                    push_image(reference, "reference_image", &mut content);
+                }
+            }
+        }
+    }
+    for video in inputs
+        .reference_videos
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+    {
+        content.push(VolcengineContentPart {
+            video_url: Some(cloudrouter_open_sdk::models::ArkVideoSource {
+                url: video.to_string(),
+            }),
+            role: Some("reference_video".to_string()),
+            r#type: "video_url".to_string(),
+            ..Default::default()
+        });
+    }
     content.push(VolcengineContentPart {
         text: Some(inputs.prompt.clone()),
         r#type: "text".to_string(),
@@ -694,6 +847,11 @@ async fn dispatch_volcengine(
     }
     if let Some(duration) = inputs.duration_seconds.filter(|value| *value > 0.0) {
         body["duration"] = serde_json::json!(duration as i64);
+    }
+    // Seedance returns synchronized audio by default; an explicit picker
+    // choice must reach the vendor body so the render matches the UI toggle.
+    if let Some(audio) = inputs.audio {
+        body["generate_audio"] = serde_json::Value::Bool(audio);
     }
     let response = adapter
         .gateway
@@ -871,6 +1029,34 @@ fn model_or_default(inputs: &GenerationCommandInputs, default: &str) -> String {
         default.to_string()
     } else {
         inputs.model.clone()
+    }
+}
+
+/// Sora pixel size for a composer ratio + resolution tier.
+///
+/// Sora's `/v1/videos` surface takes `size` (`1280x720` / `720x1280`, and
+/// `1920x1080` / `1080x1920` on the 1080p tier) instead of an aspect ratio, so
+/// a ratio-only command would otherwise render at the vendor default.
+fn openai_video_size(inputs: &GenerationCommandInputs) -> Option<String> {
+    let ratio = inputs
+        .aspect_ratio
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let hd = inputs
+        .resolution
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+        .map(|value| value == "1080p")
+        .unwrap_or(false);
+    match (ratio, hd) {
+        ("16:9", false) => Some("1280x720".to_string()),
+        ("16:9", true) => Some("1920x1080".to_string()),
+        ("9:16", false) => Some("720x1280".to_string()),
+        ("9:16", true) => Some("1080x1920".to_string()),
+        _ => None,
     }
 }
 
@@ -1483,5 +1669,288 @@ mod video_lifecycle_tests {
         assert_eq!(text_parts, 1, "the prompt rides exactly one text part");
         assert_eq!(outcome.record.status, GenerationStatus::Running);
         assert_eq!(outcome.record.source_job_id.as_deref(), Some("seedance-task-1"));
+    }
+
+    #[tokio::test]
+    async fn openai_video_maps_ratio_and_resolution_to_pixel_size() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.openai_video_create.lock().unwrap() = Some(OpenAiVideo {
+            id: "video-size".to_string(),
+            status: "queued".to_string(),
+            ..Default::default()
+        });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("openai/sora-2-pro");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "openai",
+            "generationConfig": { "aspectRatio": "16:9", "resolution": "1080p", "durationSeconds": 8 }
+        }));
+        provider
+            .dispatch(&sample_record("text_to_video"), &command, &context())
+            .await
+            .expect("sora dispatch succeeds");
+
+        let request = gateway
+            .last_openai_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("sora request captured");
+        assert_eq!(request.size.as_deref(), Some("1920x1080"));
+        assert_eq!(request.seconds.as_deref(), Some("8"));
+    }
+
+    #[tokio::test]
+    async fn video_audio_choice_reaches_the_vendor_body() {
+        // Seedance: `generate_audio` on the content-generation body.
+        let seedance_gateway = Arc::new(ScriptedGateway::default());
+        *seedance_gateway.volcengine_video_task.lock().unwrap() =
+            Some(VolcengineContentGenerationTaskCreateResponse {
+                id: Some("seedance-audio-task".to_string()),
+                ..VolcengineContentGenerationTaskCreateResponse::default()
+            });
+        let seedance = VideoGenerationProviderAdapter::new(seedance_gateway.clone(), "openai");
+        let mut seedance_command = command("bytedance/doubao-seedance-2-0-260128");
+        seedance_command.parameters = Some(serde_json::json!({
+            "vendor": "bytedance",
+            "generationConfig": { "audio": false, "resolution": "720p", "durationSeconds": 4 }
+        }));
+        seedance
+            .dispatch(&sample_record("text_to_video"), &seedance_command, &context())
+            .await
+            .expect("seedance dispatch succeeds");
+        let body = seedance_gateway
+            .last_volcengine_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("seedance request captured");
+        assert_eq!(body["generate_audio"], serde_json::json!(false));
+
+        // Vidu: the `audio` flag on its reference surface.
+        let vidu_gateway = Arc::new(ScriptedGateway::default());
+        let mut task = cloudrouter_open_sdk::models::ViduVideoGenerationTask::default();
+        task.task_id = Some("vidu-audio-task".to_string());
+        *vidu_gateway.vidu_video_task.lock().unwrap() = Some(task);
+        let vidu = VideoGenerationProviderAdapter::new(vidu_gateway.clone(), "openai");
+        let mut vidu_command = command("vidu/viduq3");
+        vidu_command.parameters = Some(serde_json::json!({
+            "vendor": "vidu",
+            "generationMode": "reference_to_video",
+            "referenceImages": [{ "url": "https://cdn.example/character.png" }],
+            "generationConfig": { "audio": true, "durationSeconds": 5 }
+        }));
+        vidu
+            .dispatch(&sample_record("image_to_video"), &vidu_command, &context())
+            .await
+            .expect("vidu dispatch succeeds");
+        let (_, request) = vidu_gateway
+            .last_vidu_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("vidu request captured");
+        assert_eq!(request["audio"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn volcengine_start_end_frame_marks_first_and_last_frame() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.volcengine_video_task.lock().unwrap() =
+            Some(VolcengineContentGenerationTaskCreateResponse {
+                id: Some("seedance-task-2".to_string()),
+                ..VolcengineContentGenerationTaskCreateResponse::default()
+            });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("bytedance/doubao-seedance-2-5-260623");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "bytedance",
+            "generationMode": "start_end_frame",
+            "referenceImages": [
+                { "url": "https://cdn.example/first.png" },
+                { "url": "https://cdn.example/last.png" }
+            ],
+            "generationConfig": { "resolution": "1080p", "aspectRatio": "16:9", "durationSeconds": 8 }
+        }));
+        provider
+            .dispatch(&sample_record("image_to_video"), &command, &context())
+            .await
+            .expect("seedance first/last frame dispatch succeeds");
+
+        let request = gateway
+            .last_volcengine_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("seedance request captured");
+        let parts: Vec<(String, String)> = request["content"]
+            .as_array()
+            .expect("content array")
+            .iter()
+            .filter(|part| part["type"] == "image_url")
+            .map(|part| (
+                part["image_url"]["url"].as_str().unwrap_or_default().to_string(),
+                part["role"].as_str().unwrap_or_default().to_string(),
+            ))
+            .collect();
+        assert_eq!(
+            parts,
+            vec![
+                ("https://cdn.example/first.png".to_string(), "first_frame".to_string()),
+                ("https://cdn.example/last.png".to_string(), "last_frame".to_string()),
+            ],
+            "first and last frames carry their catalog roles"
+        );
+    }
+
+    #[tokio::test]
+    async fn volcengine_reference_to_video_marks_reference_images() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.volcengine_video_task.lock().unwrap() =
+            Some(VolcengineContentGenerationTaskCreateResponse {
+                id: Some("seedance-task-3".to_string()),
+                ..VolcengineContentGenerationTaskCreateResponse::default()
+            });
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("bytedance/doubao-seedance-2-0-fast-260128");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "bytedance",
+            "generationMode": "reference_to_video",
+            "referenceImages": [
+                { "url": "https://cdn.example/ref-1.png" },
+                { "url": "https://cdn.example/ref-2.png" },
+                { "url": "https://cdn.example/ref-3.png" }
+            ]
+        }));
+        provider
+            .dispatch(&sample_record("image_to_video"), &command, &context())
+            .await
+            .expect("seedance reference dispatch succeeds");
+
+        let request = gateway
+            .last_volcengine_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("seedance request captured");
+        let roles: Vec<&str> = request["content"]
+            .as_array()
+            .expect("content array")
+            .iter()
+            .filter(|part| part["type"] == "image_url")
+            .filter_map(|part| part["role"].as_str())
+            .collect();
+        assert_eq!(roles, vec!["reference_image", "reference_image", "reference_image"]);
+    }
+
+    #[tokio::test]
+    async fn kling_start_end_frame_maps_image_tail_and_mode_from_resolution() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let mut task = KlingVideoGenerationTask::default();
+        task.task_id = Some("kling-task-1".to_string());
+        *gateway.kling_video_create_task.lock().unwrap() = Some(task);
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("kuaishou/kling-v3-omni");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "kuaishou",
+            "generationMode": "start_end_frame",
+            "referenceImages": [
+                { "url": "https://cdn.example/start.jpg" },
+                { "url": "https://cdn.example/end.jpg" }
+            ],
+            "generationConfig": { "resolution": "1080p", "durationSeconds": 5 }
+        }));
+        provider
+            .dispatch(&sample_record("image_to_video"), &command, &context())
+            .await
+            .expect("kling start/end dispatch succeeds");
+
+        let request = gateway
+            .last_kling_video_create_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("kling request captured");
+        assert_eq!(request.image.as_deref(), Some("https://cdn.example/start.jpg"));
+        assert_eq!(request.image_tail.as_deref(), Some("https://cdn.example/end.jpg"));
+        assert_eq!(request.mode.as_deref(), Some("pro"), "1080p maps to Kling pro mode");
+        assert_eq!(request.duration, Some(5));
+    }
+
+    #[tokio::test]
+    async fn vidu_reference_to_video_uses_the_reference_surface() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let mut task = cloudrouter_open_sdk::models::ViduVideoGenerationTask::default();
+        task.task_id = Some("vidu-ref-task".to_string());
+        *gateway.vidu_video_task.lock().unwrap() = Some(task);
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("vidu/viduq3");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "vidu",
+            "generationMode": "reference_to_video",
+            "referenceImages": [
+                { "url": "https://cdn.example/character.png" },
+                { "url": "https://cdn.example/prop.png" }
+            ],
+            "generationConfig": { "resolution": "720p", "durationSeconds": 5 }
+        }));
+        provider
+            .dispatch(&sample_record("image_to_video"), &command, &context())
+            .await
+            .expect("vidu reference dispatch succeeds");
+
+        let (surface, request) = gateway
+            .last_vidu_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("vidu request captured");
+        assert_eq!(surface, "reference2video");
+        assert_eq!(
+            request["images"],
+            serde_json::json!(["https://cdn.example/character.png", "https://cdn.example/prop.png"])
+        );
+        assert_eq!(request["resolution"], serde_json::json!("720p"));
+    }
+
+    #[tokio::test]
+    async fn vidu_start_end_frame_uses_the_start_end_surface() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        let mut task = cloudrouter_open_sdk::models::ViduVideoGenerationTask::default();
+        task.task_id = Some("vidu-start-end-task".to_string());
+        *gateway.vidu_video_task.lock().unwrap() = Some(task);
+        let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        let mut command = command("vidu/viduq3-pro");
+        command.parameters = Some(serde_json::json!({
+            "vendor": "vidu",
+            "generationMode": "start_end_frame",
+            "referenceImages": [
+                { "url": "https://cdn.example/start.png" },
+                { "url": "https://cdn.example/end.png" }
+            ],
+            "generationConfig": { "durationSeconds": 5 }
+        }));
+        provider
+            .dispatch(&sample_record("image_to_video"), &command, &context())
+            .await
+            .expect("vidu start/end dispatch succeeds");
+
+        let (surface, request) = gateway
+            .last_vidu_video_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("vidu request captured");
+        assert_eq!(surface, "start_end2video");
+        assert_eq!(
+            request["images"],
+            serde_json::json!(["https://cdn.example/start.png", "https://cdn.example/end.png"])
+        );
     }
 }

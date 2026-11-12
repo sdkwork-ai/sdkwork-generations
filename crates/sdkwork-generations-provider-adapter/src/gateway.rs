@@ -19,9 +19,10 @@ use cloudrouter_open_sdk::models::{
     OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia, ProviderTaskError,
     SunoMusicGenerationRequest, SunoMusicGenerationResponse, SunoMusicGenerationTaskResponse,
     ViduImageGenerationTask, ViduImageToVideoRequest, ViduReferenceToImageRequest,
-    ViduStartEndToVideoRequest, ViduTaskCreationsResponse, ViduTemplateRequest,
-    ViduTemplateTask, ViduTextToVideoRequest, ViduVideoGenerationTask, VolcengineContentGenerationTask,
-    VolcengineContentGenerationTaskCreateRequest, VolcengineContentGenerationTaskCreateResponse,
+    ViduReferenceToVideoRequest, ViduStartEndToVideoRequest, ViduTaskCreationsResponse,
+    ViduTemplateRequest, ViduTemplateTask, ViduTextToVideoRequest, ViduVideoGenerationTask,
+    VolcengineContentGenerationTask, VolcengineContentGenerationTaskCreateRequest,
+    VolcengineContentGenerationTaskCreateResponse,
 };
 use cloudrouter_open_sdk::{SdkworkAiClient, SdkworkError};
 use serde::{Deserialize, Serialize};
@@ -283,6 +284,17 @@ pub trait MediaSdkGateway: Send + Sync {
         &self,
         body: &ViduImageToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+        Err(SdkworkError::HttpStatus {
+            status: 599,
+            body: "gateway method not wired in this test double".to_string(),
+        })
+    }
+
+    async fn vidu_create_reference_to_video(
+        &self,
+        body: &ViduReferenceToVideoRequest,
+    ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+        let _ = body;
         Err(SdkworkError::HttpStatus {
             status: 599,
             body: "gateway method not wired in this test double".to_string(),
@@ -732,6 +744,16 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         body: &ViduImageToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
         self.client()?.videos_vidu().create_ent_v2_img2video(body).await
+    }
+
+    async fn vidu_create_reference_to_video(
+        &self,
+        body: &ViduReferenceToVideoRequest,
+    ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+        self.client()?
+            .videos_vidu()
+            .create_ent_v2_reference2video(body)
+            .await
     }
 
     async fn vidu_create_start_end_to_video(
@@ -1188,6 +1210,7 @@ pub mod test_support {
         pub openai_image_generation: Mutex<Option<OpenAiImageList>>,
         pub last_openai_image_request: Mutex<Option<OpenAiImageGenerationRequest>>,
         pub elevenlabs_sound_generation: Mutex<Option<ElevenLabsSoundGenerationResponse>>,
+        pub last_elevenlabs_sound_request: Mutex<Option<ElevenLabsSoundGenerationRequest>>,
         pub elevenlabs_text_to_speech: Mutex<Option<ElevenLabsTextToSpeechResponse>>,
         pub last_elevenlabs_text_to_speech:
             Mutex<Option<(String, ElevenLabsTextToSpeechRequest, Option<String>)>>,
@@ -1226,6 +1249,12 @@ pub mod test_support {
         pub last_vidu_image_request: Mutex<Option<ViduReferenceToImageRequest>>,
         pub vidu_image_creations: Mutex<Option<ViduTaskCreationsResponse>>,
         pub last_vidu_image_retrieve_task_id: Mutex<Option<String>>,
+        /// Last Sora video create request.
+        pub last_openai_video_request: Mutex<Option<OpenAiVideoCreateRequest>>,
+        /// One scripted task response for every Vidu video create surface.
+        pub vidu_video_task: Mutex<Option<ViduVideoGenerationTask>>,
+        /// Last Vidu video create call: surface name plus serialized body.
+        pub last_vidu_video_request: Mutex<Option<(String, serde_json::Value)>>,
         pub volcengine_image_response: Mutex<Option<VolcengineImageGenerationResponse>>,
         pub last_volcengine_image_request: Mutex<Option<VolcengineImageGenerationRequest>>,
         pub volcengine_video_task: Mutex<Option<VolcengineContentGenerationTaskCreateResponse>>,
@@ -1238,6 +1267,7 @@ pub mod test_support {
                 openai_image_generation: Mutex::new(None),
                 last_openai_image_request: Mutex::new(None),
                 elevenlabs_sound_generation: Mutex::new(None),
+                last_elevenlabs_sound_request: Mutex::new(None),
                 elevenlabs_text_to_speech: Mutex::new(None),
                 last_elevenlabs_text_to_speech: Mutex::new(None),
                 volcengine_speech: Mutex::new(None),
@@ -1273,6 +1303,9 @@ pub mod test_support {
                 last_kling_image_retrieve_task_id: Mutex::new(None),
                 vidu_image_task: Mutex::new(None),
                 last_vidu_image_request: Mutex::new(None),
+                vidu_video_task: Mutex::new(None),
+                last_vidu_video_request: Mutex::new(None),
+                last_openai_video_request: Mutex::new(None),
                 vidu_image_creations: Mutex::new(None),
                 last_vidu_image_retrieve_task_id: Mutex::new(None),
                 volcengine_image_response: Mutex::new(None),
@@ -1302,9 +1335,10 @@ pub mod test_support {
 
         async fn elevenlabs_create_sound_generation(
             &self,
-            _body: &ElevenLabsSoundGenerationRequest,
+            body: &ElevenLabsSoundGenerationRequest,
             _output_format: Option<&str>,
         ) -> Result<ElevenLabsSoundGenerationResponse, SdkworkError> {
+            *self.last_elevenlabs_sound_request.lock().unwrap() = Some(body.clone());
             self.elevenlabs_sound_generation
                 .lock()
                 .unwrap()
@@ -1536,8 +1570,9 @@ pub mod test_support {
 
         async fn openai_create_video(
             &self,
-            _body: &OpenAiVideoCreateRequest,
+            body: &OpenAiVideoCreateRequest,
         ) -> Result<OpenAiVideo, SdkworkError> {
+            *self.last_openai_video_request.lock().unwrap() = Some(body.clone());
             self.openai_video_create
                 .lock()
                 .unwrap()
@@ -1631,6 +1666,78 @@ pub mod test_support {
                 .ok_or_else(|| SdkworkError::HttpStatus {
                     status: 599,
                     body: "no scripted vidu image creations response".to_string(),
+                })
+        }
+
+        async fn vidu_create_text_to_video(
+            &self,
+            body: &ViduTextToVideoRequest,
+        ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+            *self.last_vidu_video_request.lock().unwrap() = Some((
+                "text2video".to_string(),
+                serde_json::to_value(body).unwrap_or_default(),
+            ));
+            self.vidu_video_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu video create response".to_string(),
+                })
+        }
+
+        async fn vidu_create_image_to_video(
+            &self,
+            body: &ViduImageToVideoRequest,
+        ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+            *self.last_vidu_video_request.lock().unwrap() = Some((
+                "img2video".to_string(),
+                serde_json::to_value(body).unwrap_or_default(),
+            ));
+            self.vidu_video_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu video create response".to_string(),
+                })
+        }
+
+        async fn vidu_create_reference_to_video(
+            &self,
+            body: &ViduReferenceToVideoRequest,
+        ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+            *self.last_vidu_video_request.lock().unwrap() = Some((
+                "reference2video".to_string(),
+                serde_json::to_value(body).unwrap_or_default(),
+            ));
+            self.vidu_video_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu video create response".to_string(),
+                })
+        }
+
+        async fn vidu_create_start_end_to_video(
+            &self,
+            body: &ViduStartEndToVideoRequest,
+        ) -> Result<ViduVideoGenerationTask, SdkworkError> {
+            *self.last_vidu_video_request.lock().unwrap() = Some((
+                "start_end2video".to_string(),
+                serde_json::to_value(body).unwrap_or_default(),
+            ));
+            self.vidu_video_task
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| SdkworkError::HttpStatus {
+                    status: 599,
+                    body: "no scripted vidu video create response".to_string(),
                 })
         }
 

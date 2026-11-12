@@ -275,7 +275,15 @@ mod tests {
                 &sample_record(),
                 &sfx_command(
                     "elevenlabs",
-                    serde_json::json!({"durationSeconds": 3.5, "promptInfluence": 0.6}),
+                    // The creative picker sends these under `generationConfig`,
+                    // which is where `loop` is read from.
+                    serde_json::json!({
+                        "generationConfig": {
+                            "durationSeconds": 3.5,
+                            "promptInfluence": 0.6,
+                            "loop": true
+                        }
+                    }),
                 ),
                 &context(),
             )
@@ -283,6 +291,15 @@ mod tests {
             .expect("sfx dispatch must succeed");
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(outcome.record.source_provider.as_deref(), Some("elevenlabs"));
+        let request = gateway
+            .last_elevenlabs_sound_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("elevenlabs sound request captured");
+        assert_eq!(request.duration_seconds, Some(3.5));
+        assert_eq!(request.r#loop, Some(true));
+        assert_eq!(request.prompt_influence, Some(0.6));
         let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
         assert_eq!(snapshot.content_type.as_deref(), Some("audio/mpeg"));
         assert_eq!(snapshot.duration_ms, Some(3500));

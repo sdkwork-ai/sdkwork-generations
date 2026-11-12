@@ -191,7 +191,7 @@ mod surfaces {
         } else {
             let request = OpenAiImageGenerationRequest {
                 model: model.clone(),
-                n: inputs.image_count.map(|value| value as i64),
+                n: inputs.image_count,
                 prompt: inputs.prompt.clone(),
                 quality: inputs.quality.clone(),
                 response_format: inputs.response_format.clone(),
@@ -291,18 +291,19 @@ mod surfaces {
         _selection: &VendorSelection,
         inputs: &GenerationCommandInputs,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
-        if inputs.reference_images.is_empty() {
-            return Err(GenerationsError::InvalidInput(
-                "vidu reference_to_image requires at least one reference image".to_string(),
-            ));
-        }
+        // The Vidu image surface is one endpoint for all three modes: no
+        // `images` is text-to-image, one or more `images` is image editing /
+        // reference-to-image. Requiring references here rejected every
+        // text-to-image command on a Vidu image model.
+        let images = (!inputs.reference_images.is_empty()).then(|| inputs.reference_images.clone());
         let request = ViduReferenceToImageRequest {
             aspect_ratio: inputs.aspect_ratio.clone(),
             callback_url: None,
-            images: Some(inputs.reference_images.clone()),
+            images,
             model: model_or_default(inputs, "viduq1-reference2image"),
             payload: None,
             prompt: inputs.prompt.clone(),
+            resolution: inputs.vidu_resolution(),
             seed: inputs.seed,
             ..Default::default()
         };
@@ -920,6 +921,38 @@ mod tests {
         assert_eq!(request.seed, Some(42));
         assert_eq!(outcome.record.status, GenerationStatus::Running);
         assert_eq!(outcome.record.source_job_id.as_deref(), Some("vidu-task-1"));
+    }
+
+    #[tokio::test]
+    async fn vidu_text_to_image_omits_images_when_no_reference_is_supplied() {
+        let gateway = Arc::new(ScriptedGateway::default());
+        *gateway.vidu_image_task.lock().unwrap() =
+            Some(serde_json::from_str(r#"{"task_id": "vidu-task-2"}"#).expect("vidu task fixture"));
+        let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
+
+        // Vidu's image surface covers text-to-image with no `images`; it must
+        // not be rejected as a missing reference.
+        let mut parameters = serde_json::json!({ "vendor": "vidu" });
+        parameters["resolution"] = serde_json::json!("2K");
+        let outcome = provider
+            .dispatch(
+                &sample_record("text_to_image"),
+                &command("vidu/viduq2", Some(parameters)),
+                &context(),
+            )
+            .await
+            .expect("vidu text-to-image dispatch succeeds");
+
+        let request = gateway
+            .last_vidu_image_request
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("vidu request captured");
+        assert_eq!(request.model, "viduq2");
+        assert_eq!(request.images, None);
+        assert_eq!(request.resolution.as_deref(), Some("2K"));
+        assert_eq!(outcome.record.status, GenerationStatus::Running);
     }
 
     #[tokio::test]
