@@ -28,7 +28,9 @@ use sdkwork_intelligence_generations_service::ports::{
 
 use crate::gateway::{GeminiVideoGenerationRequest, GeminiVideoInstance, GeminiVideoParameters, MediaSdkGateway};
 use crate::usage::{usage_from_media, usage_from_vidu_creations, MediaUsageKind};
-use crate::vendor::{resolve_vendor, GenerationCommandInputs};
+use crate::vendor::{
+    resolve_vendor, validate_video_aspect_ratio, validate_video_duration, GenerationCommandInputs,
+};
 use crate::{failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome, task_event, with_resolved_vendor};
 
 /// Video generation provider dispatching through the media gateway.
@@ -219,6 +221,11 @@ async fn dispatch_openai(
     record: &GenerationRecord,
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    let openai_model = model_or_default(inputs, "sora-2");
+    validate_video_duration("openai", &openai_model, &record.operation_type, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
+    validate_video_aspect_ratio("openai", &openai_model, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
     if record.operation_type == "video_extend" {
         // `OpenAiVideoExtendRequest.video` is the *source video* and `.image`
         // is an optional companion frame. Assigning the reference image to both
@@ -295,6 +302,9 @@ async fn dispatch_gemini(
         ));
     }
     let model = model_or_default(inputs, "veo-3.0-generate-001");
+    validate_video_duration("google", &model, &record.operation_type, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
+    validate_video_aspect_ratio("google", &model, inputs).map_err(GenerationsError::InvalidInput)?;
     let parameters = GeminiVideoParameters {
         aspect_ratio: inputs.aspect_ratio.clone(),
         duration_seconds: inputs.duration_seconds.map(|value| value as i64),
@@ -381,6 +391,10 @@ async fn dispatch_kling(
     record: &GenerationRecord,
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+    validate_video_duration("kuaishou", &inputs.model, &record.operation_type, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
+    validate_video_aspect_ratio("kuaishou", &inputs.model, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
     // Kling's first/last-frame surface is `image` + `image_tail`; the second
     // catalog reference is the end frame when the caller did not send a
     // dedicated tail. Kling has no resolution field: the render tier maps onto
@@ -587,6 +601,9 @@ async fn dispatch_vidu(
     inputs: &GenerationCommandInputs,
 ) -> Result<GenerationDispatchOutcome, GenerationsError> {
     let model = model_or_default(inputs, "viduq1");
+    validate_video_duration("vidu", &model, &record.operation_type, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
+    validate_video_aspect_ratio("vidu", &model, inputs).map_err(GenerationsError::InvalidInput)?;
     // The precise catalog generation mode wins over the app API operation: the
     // app API only routes text_to_video / image_to_video / video_extend, while
     // Vidu exposes reference-to-video and start-end-frame surfaces of its own.
@@ -732,6 +749,10 @@ async fn dispatch_volcengine(
     // ahead of the prompt text. The `role` decides what the reference means:
     // first/last-frame tasks must mark the frames, while reference-to-video
     // tasks send every image as `reference_image`.
+    validate_video_duration("bytedance", &inputs.model, &record.operation_type, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
+    validate_video_aspect_ratio("bytedance", &inputs.model, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
     let references: Vec<String> = inputs
         .reference_images
         .iter()

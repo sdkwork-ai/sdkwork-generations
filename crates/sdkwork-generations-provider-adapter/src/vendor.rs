@@ -395,6 +395,136 @@ impl GenerationCommandInputs {
     }
 }
 
+/// Vendor-accepted video duration vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoDurationRule {
+    /// The vendor accepts only these whole-second values.
+    Discrete(&'static [i64]),
+    /// The vendor accepts any whole second inside the inclusive window.
+    Range { min: i64, max: i64 },
+}
+
+/// Official duration rule for a wired video surface.
+///
+/// Retrieved from the vendor API references (2026-11):
+/// * OpenAI Videos: `seconds` is 4/8/12; extensions accept 4/8/12/16/20.
+///   <https://developers.openai.com/api/reference/resources/videos>
+/// * Google Veo 3.x: `durationSeconds` is 4/6/8.
+///   <https://ai.google.dev/gemini-api/docs/veo>
+/// * Kling 3.x: 3–15 s. <https://kling.ai/document-api/guides/capability-map/video.md>
+/// * Vidu Q3/Q4: 1–16 s. <https://platform.vidu.com/docs/api-reference/video-models/vidu-q3/text-to-video>
+/// * Seedance: 2–30 s (2.5 extends the 2.0 window).
+pub fn video_duration_rule(
+    vendor: &str,
+    model: &str,
+    operation: &str,
+) -> Option<VideoDurationRule> {
+    match vendor {
+        "openai" if operation == "video_extend" => {
+            Some(VideoDurationRule::Discrete(&[4, 8, 12, 16, 20]))
+        }
+        "openai" => Some(VideoDurationRule::Discrete(&[4, 8, 12])),
+        "google" if model.starts_with("veo-3") => {
+            Some(VideoDurationRule::Discrete(&[4, 6, 8]))
+        }
+        "google" if model.starts_with("veo-") => Some(VideoDurationRule::Range { min: 5, max: 8 }),
+        "kuaishou" => Some(VideoDurationRule::Range { min: 3, max: 15 }),
+        "vidu" => Some(VideoDurationRule::Range { min: 1, max: 16 }),
+        "bytedance" => Some(VideoDurationRule::Range { min: 2, max: 30 }),
+        _ => None,
+    }
+}
+
+/// Aspect ratios the vendor documents for a video surface (`None` = no local
+/// restriction).
+pub fn video_aspect_ratios(vendor: &str, model: &str) -> Option<&'static [&'static str]> {
+    match vendor {
+        "openai" => Some(&["16:9", "9:16"]),
+        "google" if model.starts_with("veo-3") => Some(&["16:9", "9:16"]),
+        "google" => Some(&["16:9", "9:16", "1:1"]),
+        "kuaishou" | "vidu" => Some(&["16:9", "9:16", "1:1"]),
+        "bytedance" => Some(&["16:9", "4:3", "1:1", "3:4", "9:16", "21:9"]),
+        _ => None,
+    }
+}
+
+fn format_duration_rule(rule: VideoDurationRule) -> String {
+    match rule {
+        VideoDurationRule::Discrete(values) => values
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+            .join("/"),
+        VideoDurationRule::Range { min, max } => format!("{min}-{max}"),
+    }
+}
+
+/// Validate a requested video duration against the vendor's published rule.
+///
+/// Fails locally with an actionable message instead of forwarding a value the
+/// vendor is documented to reject (which otherwise surfaces as an opaque 400
+/// after the task is already recorded).
+pub fn validate_video_duration(
+    vendor: &str,
+    model: &str,
+    operation: &str,
+    inputs: &GenerationCommandInputs,
+) -> Result<(), String> {
+    let Some(value) = inputs.duration_seconds else {
+        return Ok(());
+    };
+    let Some(rule) = video_duration_rule(vendor, model, operation) else {
+        return Ok(());
+    };
+    if !value.is_finite() || value <= 0.0 {
+        return Err(format!(
+            "durationSeconds must be a positive number of seconds; received {value}"
+        ));
+    }
+    if value.fract() != 0.0 {
+        return Err(format!(
+            "durationSeconds must be whole seconds for {vendor}/{model}; received {value}"
+        ));
+    }
+    let seconds = value as i64;
+    match rule {
+        VideoDurationRule::Discrete(values) if !values.contains(&seconds) => Err(format!(
+            "{vendor}/{model} supports durationSeconds {}; received {seconds}",
+            format_duration_rule(rule)
+        )),
+        VideoDurationRule::Range { min, max } if seconds < min || seconds > max => Err(format!(
+            "{vendor}/{model} supports durationSeconds {min}-{max}; received {seconds}"
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Validate a requested video aspect ratio against the vendor's published set.
+pub fn validate_video_aspect_ratio(
+    vendor: &str,
+    model: &str,
+    inputs: &GenerationCommandInputs,
+) -> Result<(), String> {
+    let Some(ratio) = inputs
+        .aspect_ratio
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(supported) = video_aspect_ratios(vendor, model) else {
+        return Ok(());
+    };
+    if supported.contains(&ratio) {
+        return Ok(());
+    }
+    Err(format!(
+        "{vendor}/{model} supports aspect ratios {}; received {ratio}",
+        supported.join("/")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +695,118 @@ mod tests {
                 selection.model, "catalog-model",
                 "the explicit vendor strips the redundant prefix"
             );
+        }
+    }
+
+    #[test]
+    fn video_duration_rules_match_the_vendor_documentation() {
+        let sora = inputs_with_duration(Some(8.0), None);
+        assert!(validate_video_duration("openai", "sora-2", "text_to_video", &sora).is_ok());
+        let sora_odd = inputs_with_duration(Some(10.0), None);
+        assert!(validate_video_duration("openai", "sora-2", "text_to_video", &sora_odd)
+            .unwrap_err()
+            .contains("4/8/12"));
+        let extend = inputs_with_duration(Some(16.0), None);
+        assert!(
+            validate_video_duration("openai", "sora-2", "video_extend", &extend).is_ok(),
+            "extensions accept 16 and 20 seconds"
+        );
+
+        let veo5 = inputs_with_duration(Some(5.0), None);
+        assert!(validate_video_duration("google", "veo-3.1-generate-preview", "text_to_video", &veo5)
+            .is_err());
+        let veo6 = inputs_with_duration(Some(6.0), None);
+        assert!(validate_video_duration("google", "veo-3.1-generate-preview", "text_to_video", &veo6)
+            .is_ok());
+
+        let kling20 = inputs_with_duration(Some(20.0), None);
+        assert!(validate_video_duration("kuaishou", "kling-v3", "text_to_video", &kling20).is_err());
+        let vidu16 = inputs_with_duration(Some(16.0), None);
+        assert!(validate_video_duration("vidu", "viduq3-pro", "text_to_video", &vidu16).is_ok());
+        let seedance31 = inputs_with_duration(Some(31.0), None);
+        assert!(
+            validate_video_duration("bytedance", "doubao-seedance-2-5-260623", "text_to_video", &seedance31)
+                .is_err()
+        );
+        let fractional = inputs_with_duration(Some(5.5), None);
+        assert!(validate_video_duration("kuaishou", "kling-v3", "text_to_video", &fractional)
+            .unwrap_err()
+            .contains("whole seconds"));
+    }
+
+    #[test]
+    fn video_ratio_rules_match_the_vendor_documentation() {
+        let openai_square = inputs_with_duration(None, Some("1:1"));
+        assert!(validate_video_aspect_ratio("openai", "sora-2", &openai_square).is_err());
+        let openai_wide = inputs_with_duration(None, Some("16:9"));
+        assert!(validate_video_aspect_ratio("openai", "sora-2", &openai_wide).is_ok());
+
+        let veo_square = inputs_with_duration(None, Some("1:1"));
+        assert!(
+            validate_video_aspect_ratio("google", "veo-3.1-generate-preview", &veo_square).is_err()
+        );
+
+        let kling_square = inputs_with_duration(None, Some("1:1"));
+        assert!(validate_video_aspect_ratio("kuaishou", "kling-v3", &kling_square).is_ok());
+
+        let seedance_wide = inputs_with_duration(None, Some("21:9"));
+        assert!(
+            validate_video_aspect_ratio("bytedance", "doubao-seedance-2-0-260128", &seedance_wide)
+                .is_ok()
+        );
+        let seedance_unknown = inputs_with_duration(None, Some("5:4"));
+        assert!(
+            validate_video_aspect_ratio("bytedance", "doubao-seedance-2-0-260128", &seedance_unknown)
+                .is_err()
+        );
+        // An unconstrained vendor passes anything through.
+        assert!(validate_video_aspect_ratio("suno", "suno-v6", &seedance_unknown).is_ok());
+    }
+
+    fn inputs_with_duration(
+        duration_seconds: Option<f64>,
+        aspect_ratio: Option<&str>,
+    ) -> GenerationCommandInputs {
+        GenerationCommandInputs {
+            prompt: "a cat".to_string(),
+            model: "catalog-model".to_string(),
+            image_count: None,
+            size: None,
+            quality: None,
+            response_format: None,
+            aspect_ratio: aspect_ratio.map(str::to_string),
+            resolution: None,
+            duration_seconds,
+            seed: None,
+            negative_prompt: None,
+            voice: None,
+            voice_id: None,
+            speed: None,
+            stability: None,
+            similarity: None,
+            style: None,
+            language: None,
+            emotion: None,
+            is_instrumental: None,
+            lyrics_optimizer: None,
+            sample_rate: None,
+            audio_bitrate: None,
+            audio_format: None,
+            tags: None,
+            title: None,
+            lyrics: None,
+            negative_tags: None,
+            mode: None,
+            cfg_scale: None,
+            loop_enabled: None,
+            audio: None,
+            generation_mode: None,
+            reference_images: Vec::new(),
+            reference_image_tail: None,
+            reference_videos: Vec::new(),
+            audio_url: None,
+            audio_text: None,
+            input_asset_ids: Vec::new(),
         }
     }
 
