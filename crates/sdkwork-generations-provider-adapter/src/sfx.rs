@@ -18,6 +18,7 @@ use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
 
 use crate::gateway::MediaSdkGateway;
 use crate::vendor::{resolve_vendor, GenerationCommandInputs, VendorSelection};
@@ -42,6 +43,15 @@ impl SoundEffectGenerationProviderAdapter {
             default_vendor: default_vendor.into(),
         }
     }
+
+    /// Caller-bound clone: the gateway carries the authenticated caller's dual
+    /// tokens for this dispatch (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+    fn bind_caller(&self, caller: &CallerCredentials) -> Self {
+        Self {
+            gateway: self.gateway.with_caller(caller),
+            default_vendor: self.default_vendor.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -62,8 +72,17 @@ impl GenerationProvider for SoundEffectGenerationProviderAdapter {
         &self,
         record: &GenerationRecord,
         command: &CreateGenerationCommandRequest,
-        _context: &GenerationsRequestContext,
+        context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+        // A user-initiated dispatch authenticates as the caller; a caller-less
+        // (background/worker) dispatch keeps the declared service identity.
+        let bound;
+        let provider = if context.caller().is_empty() {
+            self
+        } else {
+            bound = self.bind_caller(context.caller());
+            &bound
+        };
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command, &selection);
         // Persist the resolved vendor for read-path attribution (mirrors the
@@ -71,7 +90,7 @@ impl GenerationProvider for SoundEffectGenerationProviderAdapter {
         let record = with_resolved_vendor(record, &selection.vendor);
         match selection.vendor.as_str() {
             "elevenlabs" => {
-                self::surfaces::dispatch_elevenlabs(self, &record, &selection, &inputs).await
+                self::surfaces::dispatch_elevenlabs(provider, &record, &selection, &inputs).await
             }
             other => Err(GenerationsError::Provider(format!(
                 "sound effect vendor {other:?} is not supported by the generations provider adapter"
@@ -132,7 +151,12 @@ mod surfaces {
 
         Ok(succeeded_outcome(
             record,
-            vec![sound_effect_result(record, &url, mime, inputs.duration_seconds)],
+            vec![sound_effect_result(
+                record,
+                &url,
+                mime,
+                inputs.duration_seconds,
+            )],
             Some(usage),
             Vec::new(),
         ))
@@ -290,7 +314,10 @@ mod tests {
             .await
             .expect("sfx dispatch must succeed");
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
-        assert_eq!(outcome.record.source_provider.as_deref(), Some("elevenlabs"));
+        assert_eq!(
+            outcome.record.source_provider.as_deref(),
+            Some("elevenlabs")
+        );
         let request = gateway
             .last_elevenlabs_sound_request
             .lock()

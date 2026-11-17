@@ -1,5 +1,7 @@
 //! Request context for the generations service.
 
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
+
 /// HTTP request context injected by the web framework.
 #[derive(Debug, Clone)]
 pub struct GenerationsHttpRequestContext {
@@ -13,6 +15,10 @@ pub struct GenerationsHttpRequestContext {
     pub user_id: String,
     /// Request correlation id.
     pub trace_id: String,
+    /// Verified caller credentials for the outbound provider call
+    /// (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1). Never serialized, never logged;
+    /// empty on a background/worker path that uses a declared service identity.
+    pub caller: CallerCredentials,
 }
 
 /// Business-level request context.
@@ -28,6 +34,19 @@ impl GenerationsRequestContext {
     /// Create a new request context from the HTTP context.
     pub fn new(http: GenerationsHttpRequestContext) -> Self {
         Self { http }
+    }
+
+    /// Attach the verified caller credentials to this context.
+    #[must_use]
+    pub fn with_caller(mut self, caller: CallerCredentials) -> Self {
+        self.http.caller = caller;
+        self
+    }
+
+    /// The caller's dual credentials for outbound provider calls.
+    #[must_use]
+    pub fn caller(&self) -> &CallerCredentials {
+        &self.http.caller
     }
 
     /// Construct from individual fields (personal scope, no organization).
@@ -48,6 +67,7 @@ impl GenerationsRequestContext {
                 organization_id,
                 user_id,
                 trace_id,
+                caller: CallerCredentials::default(),
             },
         }
     }

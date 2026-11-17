@@ -20,17 +20,18 @@ use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
 
 use crate::gateway::{
     GeminiImageGenerationInstance, GeminiImageGenerationParameters, GeminiImageGenerationRequest,
     MediaSdkGateway, VolcengineImageGenerationRequest,
 };
+use crate::usage::{usage_from_media, usage_from_openai_image_list, MediaUsageKind};
+use crate::vendor::{resolve_vendor, GenerationCommandInputs, VendorSelection};
 use crate::{
     failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome,
     task_event, with_resolved_vendor,
 };
-use crate::usage::{usage_from_media, usage_from_openai_image_list, MediaUsageKind};
-use crate::vendor::{resolve_vendor, GenerationCommandInputs, VendorSelection};
 
 /// Image generation provider dispatching through the media gateway.
 pub struct ImageGenerationProviderAdapter {
@@ -44,6 +45,15 @@ impl ImageGenerationProviderAdapter {
         Self {
             gateway,
             default_vendor: default_vendor.into(),
+        }
+    }
+
+    /// Caller-bound clone: the gateway carries the authenticated caller's dual
+    /// tokens for this dispatch (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+    fn bind_caller(&self, caller: &CallerCredentials) -> Self {
+        Self {
+            gateway: self.gateway.with_caller(caller),
+            default_vendor: self.default_vendor.clone(),
         }
     }
 }
@@ -66,8 +76,17 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
         &self,
         record: &GenerationRecord,
         command: &CreateGenerationCommandRequest,
-        _context: &GenerationsRequestContext,
+        context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+        // A user-initiated dispatch authenticates as the caller; a caller-less
+        // (background/worker) dispatch keeps the declared service identity.
+        let bound;
+        let provider = if context.caller().is_empty() {
+            self
+        } else {
+            bound = self.bind_caller(context.caller());
+            &bound
+        };
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command, &selection);
         // The refresh path routes polling by record.source_provider; persist
@@ -76,13 +95,15 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
         let record = with_resolved_vendor(record, &selection.vendor);
         match selection.vendor.as_str() {
             "openai" | "midjourney" => {
-                self::surfaces::dispatch_openai(self, &record, &selection, &inputs).await
+                self::surfaces::dispatch_openai(provider, &record, &selection, &inputs).await
             }
-            "nano-banana" => self::surfaces::dispatch_nano_banana(self, &record, &selection, &inputs).await,
-            "vidu" => self::surfaces::dispatch_vidu(self, &record, &selection, &inputs).await,
-            "kling" => self::surfaces::dispatch_kling(self, &record, &selection, &inputs).await,
+            "nano-banana" => {
+                self::surfaces::dispatch_nano_banana(provider, &record, &selection, &inputs).await
+            }
+            "vidu" => self::surfaces::dispatch_vidu(provider, &record, &selection, &inputs).await,
+            "kling" => self::surfaces::dispatch_kling(provider, &record, &selection, &inputs).await,
             "volcengine" | "jimeng" => {
-                self::surfaces::dispatch_volcengine(self, &record, &selection, &inputs).await
+                self::surfaces::dispatch_volcengine(provider, &record, &selection, &inputs).await
             }
             other => Err(GenerationsError::Provider(format!(
                 "image vendor {other:?} is not supported by the generations provider adapter"
@@ -95,7 +116,11 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
         record: &GenerationRecord,
         _context: &GenerationsRequestContext,
     ) -> Result<Option<GenerationDispatchOutcome>, GenerationsError> {
-        let Some(task_id) = record.source_job_id.as_deref().filter(|v| !v.trim().is_empty()) else {
+        let Some(task_id) = record
+            .source_job_id
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+        else {
             return Ok(None);
         };
         let inputs = GenerationCommandInputs::default();
@@ -130,16 +155,11 @@ impl GenerationProvider for ImageGenerationProviderAdapter {
                     .map_err(crate::media_sdk_error)?;
                 let mut results = Vec::new();
                 for creation in task.creations.iter().flatten() {
-                    if let Some(url) = creation
-                        .image_url
-                        .clone()
-                        .or_else(|| creation.url.clone())
-                    {
+                    if let Some(url) = creation.image_url.clone().or_else(|| creation.url.clone()) {
                         results.push(image_result(record, &url, None));
                     }
                 }
-                let usage =
-                    crate::usage::usage_from_vidu_creations(&vendor, &inputs, &task);
+                let usage = crate::usage::usage_from_vidu_creations(&vendor, &inputs, &task);
                 Ok(Some(finish_outcome(record, results, Some(usage))))
             }
             _ => Ok(None),
@@ -254,9 +274,7 @@ mod surfaces {
             .await
             .map_err(crate::media_sdk_error)?;
         if let Some(error) = response.error.as_ref() {
-            return Err(GenerationsError::Provider(crate::task_error_message(
-                error,
-            )));
+            return Err(GenerationsError::Provider(crate::task_error_message(error)));
         }
         let locators = response.image_locators();
         if locators.is_empty() {
@@ -315,7 +333,10 @@ mod surfaces {
         Ok(pending_outcome(
             record,
             task.task_id.as_deref().unwrap_or_default(),
-            vec![task_event(record, task.task_id.as_deref().unwrap_or_default())],
+            vec![task_event(
+                record,
+                task.task_id.as_deref().unwrap_or_default(),
+            )],
         ))
     }
 
@@ -354,7 +375,15 @@ mod surfaces {
             .kling_create_image_generation(&request)
             .await
             .map_err(crate::media_sdk_error)?;
-        finish_task_dispatch(record, inputs, "kling", task.task_id.as_deref().or(task.id.as_deref()), task.status.as_deref().or(task.state.as_deref()), task.images.clone().unwrap_or_default(), task.error.as_ref().map(crate::task_error_message))
+        finish_task_dispatch(
+            record,
+            inputs,
+            "kling",
+            task.task_id.as_deref().or(task.id.as_deref()),
+            task.status.as_deref().or(task.state.as_deref()),
+            task.images.clone().unwrap_or_default(),
+            task.error.as_ref().map(crate::task_error_message),
+        )
     }
 
     pub(super) async fn dispatch_volcengine(
@@ -427,12 +456,21 @@ mod surfaces {
                     .filter_map(|entry| entry.url.clone().or_else(|| entry.uri.clone()))
                     .map(|url| image_result(record, &url, None))
                     .collect(),
-                Some(usage_from_media(vendor, inputs, &media, MediaUsageKind::Image)),
+                Some(usage_from_media(
+                    vendor,
+                    inputs,
+                    &media,
+                    MediaUsageKind::Image,
+                )),
             )),
-            GenerationStatus::Failed => Err(GenerationsError::Provider(error.unwrap_or_else(
-                || format!("vendor task {task_id} failed"),
-            ))),
-            _ => Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)])),
+            GenerationStatus::Failed => Err(GenerationsError::Provider(
+                error.unwrap_or_else(|| format!("vendor task {task_id} failed")),
+            )),
+            _ => Ok(pending_outcome(
+                record,
+                task_id,
+                vec![task_event(record, task_id)],
+            )),
         }
     }
 
@@ -455,12 +493,12 @@ mod surfaces {
                     .filter_map(|entry| entry.url.clone().or_else(|| entry.uri.clone()))
                     .map(|url| image_result(record, &url, None))
                     .collect();
-                let mut usage =
-                    usage_from_media(vendor, inputs, &media, MediaUsageKind::Image);
+                let mut usage = usage_from_media(vendor, inputs, &media, MediaUsageKind::Image);
                 // The refresh path carries default inputs, so the
                 // vendor-reported model is the only metering model source.
-                if let Some(model) =
-                    vendor_model.map(str::trim).filter(|model| !model.is_empty())
+                if let Some(model) = vendor_model
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
                 {
                     usage.model = Some(model.to_string());
                 }
@@ -500,7 +538,11 @@ fn image_result_from_openai(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| openai_b64_data_uri(image));
-    image_result(record, url.as_deref().unwrap_or_default(), image.mime_type.as_deref())
+    image_result(
+        record,
+        url.as_deref().unwrap_or_default(),
+        image.mime_type.as_deref(),
+    )
 }
 
 fn openai_b64_data_uri(image: &cloudrouter_open_sdk::models::OpenAiImage) -> Option<String> {
@@ -513,11 +555,7 @@ fn openai_b64_data_uri(image: &cloudrouter_open_sdk::models::OpenAiImage) -> Opt
     })
 }
 
-fn image_result(
-    record: &GenerationRecord,
-    url: &str,
-    mime_type: Option<&str>,
-) -> GenerationResult {
+fn image_result(record: &GenerationRecord, url: &str, mime_type: Option<&str>) -> GenerationResult {
     GenerationResult {
         id: format!("{}:image-{}", record.id, uuid::Uuid::new_v4()),
         generation_id: record.id.clone(),
@@ -638,20 +676,24 @@ mod tests {
     #[tokio::test]
     async fn openai_text_to_image_forwards_size_quality_count_and_format() {
         let gateway = Arc::new(ScriptedGateway::default());
-        *gateway.openai_image_generation.lock().unwrap() = Some(cloudrouter_open_sdk::models::OpenAiImageList {
-            created: 0,
-            data: vec![OpenAiImage {
-                url: Some("https://cdn.example/out.png".to_string()),
-                ..OpenAiImage::default()
-            }],
-            usage: None,
-        });
+        *gateway.openai_image_generation.lock().unwrap() =
+            Some(cloudrouter_open_sdk::models::OpenAiImageList {
+                created: 0,
+                data: vec![OpenAiImage {
+                    url: Some("https://cdn.example/out.png".to_string()),
+                    ..OpenAiImage::default()
+                }],
+                usage: None,
+            });
         let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
 
         let outcome = provider
             .dispatch(
                 &sample_record("text_to_image"),
-                &command("openai/gpt-image-2", Some(reference_parameters(serde_json::json!([])))),
+                &command(
+                    "openai/gpt-image-2",
+                    Some(reference_parameters(serde_json::json!([]))),
+                ),
                 &context(),
             )
             .await
@@ -663,14 +705,22 @@ mod tests {
             .unwrap()
             .clone()
             .expect("openai request captured");
-        assert_eq!(request.model, "gpt-image-2", "the vendor prefix is stripped");
+        assert_eq!(
+            request.model, "gpt-image-2",
+            "the vendor prefix is stripped"
+        );
         assert_eq!(request.n, Some(2));
         assert_eq!(request.size.as_deref(), Some("1024x1024"));
         assert_eq!(request.quality.as_deref(), Some("high"));
         assert_eq!(request.response_format.as_deref(), Some("url"));
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(
-            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            outcome.results[0]
+                .resource_snapshot
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
             Some("https://cdn.example/out.png")
         );
     }
@@ -678,14 +728,15 @@ mod tests {
     #[tokio::test]
     async fn openai_b64_only_response_becomes_a_data_uri() {
         let gateway = Arc::new(ScriptedGateway::default());
-        *gateway.openai_image_generation.lock().unwrap() = Some(cloudrouter_open_sdk::models::OpenAiImageList {
-            created: 0,
-            data: vec![OpenAiImage {
-                b64_json: Some("aW1hZ2VieXRlcw==".to_string()),
-                ..OpenAiImage::default()
-            }],
-            usage: None,
-        });
+        *gateway.openai_image_generation.lock().unwrap() =
+            Some(cloudrouter_open_sdk::models::OpenAiImageList {
+                created: 0,
+                data: vec![OpenAiImage {
+                    b64_json: Some("aW1hZ2VieXRlcw==".to_string()),
+                    ..OpenAiImage::default()
+                }],
+                usage: None,
+            });
         let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
 
         let outcome = provider
@@ -709,14 +760,15 @@ mod tests {
     #[tokio::test]
     async fn openai_image_edit_forwards_the_reference_url() {
         let gateway = Arc::new(ScriptedGateway::default());
-        *gateway.openai_image_edit_list.lock().unwrap() = Some(cloudrouter_open_sdk::models::OpenAiImageList {
-            created: 0,
-            data: vec![OpenAiImage {
-                url: Some("https://cdn.example/edited.png".to_string()),
-                ..OpenAiImage::default()
-            }],
-            usage: None,
-        });
+        *gateway.openai_image_edit_list.lock().unwrap() =
+            Some(cloudrouter_open_sdk::models::OpenAiImageList {
+                created: 0,
+                data: vec![OpenAiImage {
+                    url: Some("https://cdn.example/edited.png".to_string()),
+                    ..OpenAiImage::default()
+                }],
+                usage: None,
+            });
         let provider = ImageGenerationProviderAdapter::new(gateway.clone(), "openai");
 
         provider
@@ -784,11 +836,20 @@ mod tests {
             .clone()
             .expect("kling request captured");
         assert_eq!(request.model_name.as_deref(), Some("kling-v2-6"));
-        assert_eq!(request.image.as_deref(), Some("https://cdn.example/ref.png"));
-        assert!(request.image_reference_list.is_none(), "single reference stays on image");
+        assert_eq!(
+            request.image.as_deref(),
+            Some("https://cdn.example/ref.png")
+        );
+        assert!(
+            request.image_reference_list.is_none(),
+            "single reference stays on image"
+        );
         assert_eq!(request.aspect_ratio.as_deref(), Some("1:1"));
         assert_eq!(outcome.record.status, GenerationStatus::Running);
-        assert_eq!(outcome.record.source_job_id.as_deref(), Some("kling-task-1"));
+        assert_eq!(
+            outcome.record.source_job_id.as_deref(),
+            Some("kling-task-1")
+        );
         assert_eq!(outcome.record.source_provider.as_deref(), Some("kling"));
     }
 
@@ -863,12 +924,21 @@ mod tests {
             .expect("kling retrieve produces an outcome");
 
         assert_eq!(
-            gateway.last_kling_image_retrieve_task_id.lock().unwrap().as_deref(),
+            gateway
+                .last_kling_image_retrieve_task_id
+                .lock()
+                .unwrap()
+                .as_deref(),
             Some("kling-task-1")
         );
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(
-            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            outcome.results[0]
+                .resource_snapshot
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
             Some("https://cdn.example/kling.png")
         );
         // The refresh path holds no original command, so the vendor-reported
@@ -998,7 +1068,12 @@ mod tests {
         assert_eq!(request.seed, None, "no seed supplied by the fixture");
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(
-            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            outcome.results[0]
+                .resource_snapshot
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
             Some("https://cdn.example/seedream.png")
         );
         let usage = outcome.usage.expect("volcengine usage is reported");
@@ -1042,9 +1117,13 @@ mod tests {
         assert_eq!(parameters.aspect_ratio.as_deref(), Some("1:1"));
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(
-            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            outcome.results[0]
+                .resource_snapshot
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
             Some("https://cdn.example/gemini.png")
         );
     }
 }
-

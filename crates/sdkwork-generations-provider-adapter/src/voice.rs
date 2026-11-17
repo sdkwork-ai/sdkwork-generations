@@ -11,8 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
     ElevenLabsTextToSpeechRequest, ElevenLabsVoiceSettings, OpenAiAudioTranscriptionRequest,
-    OpenAiAudioTranslationRequest,
-    OpenAiFileReferenceInput, OpenAiSpeechCreateRequest,
+    OpenAiAudioTranslationRequest, OpenAiFileReferenceInput, OpenAiSpeechCreateRequest,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
 use sdkwork_intelligence_generations_service::domain::models::{
@@ -23,6 +22,7 @@ use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
 
 use crate::gateway::MediaSdkGateway;
 use crate::vendor::{resolve_vendor, GenerationCommandInputs, VendorSelection};
@@ -40,6 +40,15 @@ impl VoiceGenerationProviderAdapter {
         Self {
             gateway,
             default_vendor: default_vendor.into(),
+        }
+    }
+
+    /// Caller-bound clone: the gateway carries the authenticated caller's dual
+    /// tokens for this dispatch (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+    fn bind_caller(&self, caller: &CallerCredentials) -> Self {
+        Self {
+            gateway: self.gateway.with_caller(caller),
+            default_vendor: self.default_vendor.clone(),
         }
     }
 }
@@ -62,8 +71,17 @@ impl GenerationProvider for VoiceGenerationProviderAdapter {
         &self,
         record: &GenerationRecord,
         command: &CreateGenerationCommandRequest,
-        _context: &GenerationsRequestContext,
+        context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+        // A user-initiated dispatch authenticates as the caller; a caller-less
+        // (background/worker) dispatch keeps the declared service identity.
+        let bound;
+        let provider = if context.caller().is_empty() {
+            self
+        } else {
+            bound = self.bind_caller(context.caller());
+            &bound
+        };
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command, &selection);
         // Persist the resolved vendor so reads/reporting attribute the record
@@ -71,21 +89,27 @@ impl GenerationProvider for VoiceGenerationProviderAdapter {
         let record = with_resolved_vendor(record, &selection.vendor);
         match record.operation_type.as_str() {
             "speech" => match selection.vendor.as_str() {
-                "openai" => self::surfaces::dispatch_speech_openai(self, &record, &inputs).await,
+                "openai" => {
+                    self::surfaces::dispatch_speech_openai(provider, &record, &inputs).await
+                }
                 "elevenlabs" => {
-                    self::surfaces::dispatch_speech_elevenlabs(self, &record, &selection, &inputs)
-                        .await
+                    self::surfaces::dispatch_speech_elevenlabs(
+                        provider, &record, &selection, &inputs,
+                    )
+                    .await
                 }
                 "volcengine" | "jimeng" => {
-                    self::surfaces::dispatch_speech_volcengine(self, &record, &selection, &inputs)
-                        .await
+                    self::surfaces::dispatch_speech_volcengine(
+                        provider, &record, &selection, &inputs,
+                    )
+                    .await
                 }
                 other => Err(GenerationsError::Provider(format!(
                     "voice vendor {other:?} is not supported by the generations provider adapter"
                 ))),
             },
-            "transcription" => dispatch_transcription(self, &record, &inputs).await,
-            "translation" => dispatch_translation(self, &record, &inputs).await,
+            "transcription" => dispatch_transcription(provider, &record, &inputs).await,
+            "translation" => dispatch_translation(provider, &record, &inputs).await,
             other => Err(GenerationsError::InvalidInput(format!(
                 "voice operation {other:?} is not supported"
             ))),
@@ -111,12 +135,7 @@ mod surfaces {
             voice: inputs.voice.clone().unwrap_or_else(|| "alloy".to_string()),
             ..Default::default()
         };
-        let bytes = speech_bytes(
-            adapter
-                .gateway
-                .openai_create_speech(&request)
-                .await,
-        )?;
+        let bytes = speech_bytes(adapter.gateway.openai_create_speech(&request).await)?;
         let mime = audio_mime_from_format(inputs.response_format.as_deref());
         let mut usage = GenerationUsage::new("openai");
         usage.model = Some(model);
@@ -152,7 +171,11 @@ mod surfaces {
         };
         let response = adapter
             .gateway
-            .elevenlabs_create_text_to_speech(&voice_id, &request, inputs.response_format.as_deref())
+            .elevenlabs_create_text_to_speech(
+                &voice_id,
+                &request,
+                inputs.response_format.as_deref(),
+            )
             .await
             .map_err(|error| GenerationsError::Provider(error.to_string()))?;
         let url = response
@@ -249,7 +272,12 @@ async fn dispatch_transcription(
     let mut usage = GenerationUsage::new("openai");
     usage.audio_seconds = transcription.duration.unwrap_or_default();
     usage.model = Some(model_or_default(inputs, "whisper-1"));
-    Ok(succeeded_outcome(record, vec![result], Some(usage), Vec::new()))
+    Ok(succeeded_outcome(
+        record,
+        vec![result],
+        Some(usage),
+        Vec::new(),
+    ))
 }
 
 async fn dispatch_translation(
@@ -288,7 +316,12 @@ async fn dispatch_translation(
     let mut usage = GenerationUsage::new("openai");
     usage.audio_seconds = translation.duration.unwrap_or_default();
     usage.model = Some(model_or_default(inputs, "whisper-1"));
-    Ok(succeeded_outcome(record, vec![result], Some(usage), Vec::new()))
+    Ok(succeeded_outcome(
+        record,
+        vec![result],
+        Some(usage),
+        Vec::new(),
+    ))
 }
 
 /// Build ElevenLabs `voice_settings` from the shared speech parameters.
@@ -307,7 +340,9 @@ fn voice_settings(inputs: &GenerationCommandInputs) -> Option<ElevenLabsVoiceSet
     .then_some(settings)
 }
 
-fn speech_bytes(result: Result<Vec<u8>, cloudrouter_open_sdk::SdkworkError>) -> Result<Vec<u8>, GenerationsError> {
+fn speech_bytes(
+    result: Result<Vec<u8>, cloudrouter_open_sdk::SdkworkError>,
+) -> Result<Vec<u8>, GenerationsError> {
     let bytes = result.map_err(|error| GenerationsError::Provider(error.to_string()))?;
     if bytes.is_empty() {
         return Err(GenerationsError::Provider(
@@ -401,7 +436,9 @@ mod tests {
     use sdkwork_intelligence_generations_service::domain::models::{
         CreateGenerationCommandRequest, GenerationModality, GenerationRecord, GenerationStatus,
     };
-    use sdkwork_intelligence_generations_service::ports::{GenerationDispatchOutcome, GenerationProvider};
+    use sdkwork_intelligence_generations_service::ports::{
+        GenerationDispatchOutcome, GenerationProvider,
+    };
 
     use crate::gateway::test_support::ScriptedGateway;
     use crate::vendor::VENDOR_ELEVENLABS;
@@ -483,7 +520,11 @@ mod tests {
         assert_eq!(outcome.record.source_provider.as_deref(), Some("openai"));
         let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
         assert_eq!(snapshot.content_type.as_deref(), Some("audio/mpeg"));
-        assert!(snapshot.url.as_deref().unwrap().starts_with("data:audio/mpeg;base64,"));
+        assert!(snapshot
+            .url
+            .as_deref()
+            .unwrap()
+            .starts_with("data:audio/mpeg;base64,"));
         let request = gateway
             .last_openai_speech_request
             .lock()
@@ -515,10 +556,16 @@ mod tests {
         );
         let outcome = dispatch(gateway.clone(), &command).await;
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
-        assert_eq!(outcome.record.source_provider.as_deref(), Some(VENDOR_ELEVENLABS));
+        assert_eq!(
+            outcome.record.source_provider.as_deref(),
+            Some(VENDOR_ELEVENLABS)
+        );
         assert_eq!(outcome.results.len(), 1);
         let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
-        assert_eq!(snapshot.url.as_deref(), Some("https://cdn.example/speech.mp3"));
+        assert_eq!(
+            snapshot.url.as_deref(),
+            Some("https://cdn.example/speech.mp3")
+        );
         assert_eq!(snapshot.content_type.as_deref(), Some("audio/mpeg"));
         let (voice_id, request, _format) = gateway
             .last_elevenlabs_text_to_speech
@@ -556,7 +603,9 @@ mod tests {
             .unwrap()
             .clone()
             .expect("elevenlabs speech request captured");
-        let settings = request.voice_settings.expect("voice settings built from similarity alone");
+        let settings = request
+            .voice_settings
+            .expect("voice settings built from similarity alone");
         assert_eq!(settings.similarity_boost, Some(0.9));
         assert!(settings.stability.is_none());
     }
@@ -565,7 +614,11 @@ mod tests {
     async fn speech_elevenlabs_requires_a_voice_id() {
         let gateway = Arc::new(ScriptedGateway::default());
         let adapter = VoiceGenerationProviderAdapter::new(gateway, "openai");
-        let command = speech_command(VENDOR_ELEVENLABS, "eleven_multilingual_v2", serde_json::json!({}));
+        let command = speech_command(
+            VENDOR_ELEVENLABS,
+            "eleven_multilingual_v2",
+            serde_json::json!({}),
+        );
         let error = adapter
             .dispatch(&sample_record(), &command, &context())
             .await
@@ -587,10 +640,17 @@ mod tests {
         );
         let outcome = dispatch(gateway.clone(), &command).await;
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
-        assert_eq!(outcome.record.source_provider.as_deref(), Some("volcengine"));
+        assert_eq!(
+            outcome.record.source_provider.as_deref(),
+            Some("volcengine")
+        );
         let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
         assert_eq!(snapshot.content_type.as_deref(), Some("audio/wav"));
-        assert!(snapshot.url.as_deref().unwrap().starts_with("data:audio/wav;base64,"));
+        assert!(snapshot
+            .url
+            .as_deref()
+            .unwrap()
+            .starts_with("data:audio/wav;base64,"));
         let request = gateway
             .last_volcengine_speech_request
             .lock()

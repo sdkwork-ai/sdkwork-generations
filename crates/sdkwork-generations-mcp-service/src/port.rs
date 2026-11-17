@@ -6,7 +6,9 @@ use sdkwork_intelligence_generations_service::domain::models::{
 };
 use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::{ListResultsParams, ListTimelineParams};
-use sdkwork_intelligence_generations_service::{GenerationsRequestContext, GenerationsService, GenerationsServiceState};
+use sdkwork_intelligence_generations_service::{
+    GenerationsRequestContext, GenerationsService, GenerationsServiceState,
+};
 
 /// Port the MCP tools use to reach the generations service.
 #[async_trait]
@@ -20,21 +22,36 @@ pub trait GenerationsMcpPort: Send + Sync {
     ) -> Result<GenerationRecord, GenerationsError>;
 
     /// Retrieve a generation record (refreshing async tasks on read).
-    async fn get_generation(&self, generation_id: &str) -> Result<GenerationRecord, GenerationsError>;
+    async fn get_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<GenerationRecord, GenerationsError>;
 
     /// List the persisted results of a generation.
     async fn list_results(
         &self,
         generation_id: &str,
         params: ListResultsParams,
-    ) -> Result<(Vec<GenerationResult>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError>;
+    ) -> Result<
+        (
+            Vec<GenerationResult>,
+            sdkwork_intelligence_generations_service::domain::models::PageInfo,
+        ),
+        GenerationsError,
+    >;
 
     /// List the timeline events of a generation.
     async fn list_timeline(
         &self,
         generation_id: &str,
         params: ListTimelineParams,
-    ) -> Result<(Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError>;
+    ) -> Result<
+        (
+            Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>,
+            sdkwork_intelligence_generations_service::domain::models::PageInfo,
+        ),
+        GenerationsError,
+    >;
 }
 
 /// Production port backed by the generations service state.
@@ -49,20 +66,22 @@ impl StateGenerationsMcpPort {
     pub fn new(state: GenerationsServiceState) -> Self {
         Self {
             state,
-            tenant_id: std::env::var("GENERATIONS_MCP_TENANT_ID").unwrap_or_else(|_| "0".to_string()),
-            user_id: std::env::var("GENERATIONS_MCP_USER_ID").unwrap_or_else(|_| "mcp-agent".to_string()),
+            tenant_id: std::env::var("GENERATIONS_MCP_TENANT_ID")
+                .unwrap_or_else(|_| "0".to_string()),
+            user_id: std::env::var("GENERATIONS_MCP_USER_ID")
+                .unwrap_or_else(|_| "mcp-agent".to_string()),
         }
     }
 
     fn context(&self) -> GenerationsRequestContext {
-        GenerationsRequestContext {
-            http: sdkwork_intelligence_generations_service::GenerationsHttpRequestContext {
-                tenant_id: self.tenant_id.clone(),
-                organization_id: None,
-                user_id: self.user_id.clone(),
-                trace_id: uuid::Uuid::new_v4().to_string(),
-            },
-        }
+        // identity:service — MCP/worker-issued generation uses the declared
+        // deployment identity; there is no end-user request to borrow a caller
+        // token from, so the context carries an empty caller pair.
+        GenerationsRequestContext::from_parts(
+            self.tenant_id.clone(),
+            self.user_id.clone(),
+            uuid::Uuid::new_v4().to_string(),
+        )
     }
 }
 
@@ -86,7 +105,10 @@ impl GenerationsMcpPort for StateGenerationsMcpPort {
         Ok(response.generation)
     }
 
-    async fn get_generation(&self, generation_id: &str) -> Result<GenerationRecord, GenerationsError> {
+    async fn get_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<GenerationRecord, GenerationsError> {
         let context = self.context();
         GenerationsService::get_generation(&self.state, &context, generation_id).await
     }
@@ -95,7 +117,13 @@ impl GenerationsMcpPort for StateGenerationsMcpPort {
         &self,
         generation_id: &str,
         params: ListResultsParams,
-    ) -> Result<(Vec<GenerationResult>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError> {
+    ) -> Result<
+        (
+            Vec<GenerationResult>,
+            sdkwork_intelligence_generations_service::domain::models::PageInfo,
+        ),
+        GenerationsError,
+    > {
         let context = self.context();
         GenerationsService::list_results(&self.state, &context, generation_id, params).await
     }
@@ -104,7 +132,13 @@ impl GenerationsMcpPort for StateGenerationsMcpPort {
         &self,
         generation_id: &str,
         params: ListTimelineParams,
-    ) -> Result<(Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError> {
+    ) -> Result<
+        (
+            Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>,
+            sdkwork_intelligence_generations_service::domain::models::PageInfo,
+        ),
+        GenerationsError,
+    > {
         let context = self.context();
         GenerationsService::list_timeline(&self.state, &context, generation_id, params).await
     }
@@ -158,7 +192,10 @@ impl GenerationsMcpPort for InMemoryGenerationsMcpPort {
         Ok(record)
     }
 
-    async fn get_generation(&self, generation_id: &str) -> Result<GenerationRecord, GenerationsError> {
+    async fn get_generation(
+        &self,
+        generation_id: &str,
+    ) -> Result<GenerationRecord, GenerationsError> {
         self.records
             .lock()
             .await
@@ -172,7 +209,13 @@ impl GenerationsMcpPort for InMemoryGenerationsMcpPort {
         &self,
         _generation_id: &str,
         _params: ListResultsParams,
-    ) -> Result<(Vec<GenerationResult>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError> {
+    ) -> Result<
+        (
+            Vec<GenerationResult>,
+            sdkwork_intelligence_generations_service::domain::models::PageInfo,
+        ),
+        GenerationsError,
+    > {
         Ok((
             Vec::new(),
             sdkwork_intelligence_generations_service::domain::models::PageInfo::cursor(None, false),
@@ -183,7 +226,13 @@ impl GenerationsMcpPort for InMemoryGenerationsMcpPort {
         &self,
         _generation_id: &str,
         _params: ListTimelineParams,
-    ) -> Result<(Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>, sdkwork_intelligence_generations_service::domain::models::PageInfo), GenerationsError> {
+    ) -> Result<
+        (
+            Vec<sdkwork_intelligence_generations_service::domain::models::GenerationTimelineEvent>,
+            sdkwork_intelligence_generations_service::domain::models::PageInfo,
+        ),
+        GenerationsError,
+    > {
         Ok((
             Vec::new(),
             sdkwork_intelligence_generations_service::domain::models::PageInfo::cursor(None, false),

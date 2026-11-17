@@ -117,8 +117,18 @@ struct GenerationsRequestContextInjector;
 
 impl DomainContextInjector for GenerationsRequestContextInjector {
     fn inject(&self, request: &mut axum::extract::Request, context: &WebRequestContext) {
+        // APP_SDK_INTEGRATION_SPEC §5.2.1: the verified caller's dual tokens
+        // travel with the domain context so the provider adapters can carry
+        // them to cloudrouter instead of a process credential.
+        let caller = request
+            .extensions()
+            .get::<sdkwork_web_core::CallerCredentials>()
+            .cloned()
+            .unwrap_or_default();
         if let Some(gen_context) = generations_request_context_from_web_request(context) {
-            request.extensions_mut().insert(gen_context);
+            request
+                .extensions_mut()
+                .insert(gen_context.with_caller(caller));
         }
     }
 }
@@ -137,11 +147,8 @@ fn generations_request_context_from_web_request(
             tenant_id: principal.tenant_id().to_string(),
             organization_id: principal.organization_id().map(str::to_string),
             user_id: principal.user_id().to_string(),
-            trace_id: context
-                .trace_id
-                .as_deref()
-                .unwrap_or_default()
-                .to_string(),
+            trace_id: context.trace_id.as_deref().unwrap_or_default().to_string(),
+            caller: sdkwork_web_core::CallerCredentials::default(),
         },
     })
 }

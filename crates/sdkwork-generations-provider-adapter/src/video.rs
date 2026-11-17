@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cloudrouter_open_sdk::models::{
-    ArkImageSource, KlingAvatarCreateRequest, KlingMotionControlRequest, KlingVideoGenerationRequest,
-    OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia,
-    ViduImageToVideoRequest, ViduReferenceToVideoRequest, ViduStartEndToVideoRequest,
-    ViduTemplateRequest, ViduTextToVideoRequest, VolcengineContentGenerationTaskCreateRequest,
-    VolcengineContentPart,
+    ArkImageSource, KlingAvatarCreateRequest, KlingMotionControlRequest,
+    KlingVideoGenerationRequest, OpenAiVideoCreateRequest, OpenAiVideoExtendRequest,
+    ProviderGeneratedMedia, ViduImageToVideoRequest, ViduReferenceToVideoRequest,
+    ViduStartEndToVideoRequest, ViduTemplateRequest, ViduTextToVideoRequest,
+    VolcengineContentGenerationTaskCreateRequest, VolcengineContentPart,
 };
 use sdkwork_intelligence_generations_service::context::GenerationsRequestContext;
 use sdkwork_intelligence_generations_service::domain::models::{
@@ -25,13 +25,19 @@ use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
 
-use crate::gateway::{GeminiVideoGenerationRequest, GeminiVideoInstance, GeminiVideoParameters, MediaSdkGateway};
+use crate::gateway::{
+    GeminiVideoGenerationRequest, GeminiVideoInstance, GeminiVideoParameters, MediaSdkGateway,
+};
 use crate::usage::{usage_from_media, usage_from_vidu_creations, MediaUsageKind};
 use crate::vendor::{
     resolve_vendor, validate_video_aspect_ratio, validate_video_duration, GenerationCommandInputs,
 };
-use crate::{failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome, task_event, with_resolved_vendor};
+use crate::{
+    failed_outcome, pending_outcome, record_outcome, status_from_vendor, succeeded_outcome,
+    task_event, with_resolved_vendor,
+};
 
 /// Video generation provider dispatching through the media gateway.
 pub struct VideoGenerationProviderAdapter {
@@ -45,6 +51,15 @@ impl VideoGenerationProviderAdapter {
         Self {
             gateway,
             default_vendor: default_vendor.into(),
+        }
+    }
+
+    /// Caller-bound clone: the gateway carries the authenticated caller's dual
+    /// tokens for this dispatch (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+    fn bind_caller(&self, caller: &CallerCredentials) -> Self {
+        Self {
+            gateway: self.gateway.with_caller(caller),
+            default_vendor: self.default_vendor.clone(),
         }
     }
 }
@@ -73,8 +88,17 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
         &self,
         record: &GenerationRecord,
         command: &CreateGenerationCommandRequest,
-        _context: &GenerationsRequestContext,
+        context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+        // A user-initiated dispatch authenticates as the caller; a caller-less
+        // (background/worker) dispatch keeps the declared service identity.
+        let bound;
+        let provider = if context.caller().is_empty() {
+            self
+        } else {
+            bound = self.bind_caller(context.caller());
+            &bound
+        };
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command, &selection);
         // The refresh path routes polling by record.source_provider; persist
@@ -100,24 +124,24 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
             _ => {}
         }
         match selection.vendor.as_str() {
-            "openai" => dispatch_openai(self, &record, &inputs).await,
-            "nano-banana" | "veo" => dispatch_gemini(self, &record, &inputs).await,
+            "openai" => dispatch_openai(provider, &record, &inputs).await,
+            "nano-banana" | "veo" => dispatch_gemini(provider, &record, &inputs).await,
             "kling" => match record.operation_type.as_str() {
                 "avatar_video" => {
-                    dispatch_kling_avatar(self, &record, &selection, &inputs).await
+                    dispatch_kling_avatar(provider, &record, &selection, &inputs).await
                 }
                 "motion_mimicry" => {
-                    dispatch_kling_motion_control(self, &record, &selection, &inputs).await
+                    dispatch_kling_motion_control(provider, &record, &selection, &inputs).await
                 }
-                _ => dispatch_kling(self, &record, &inputs).await,
+                _ => dispatch_kling(provider, &record, &inputs).await,
             },
             "vidu" => match record.operation_type.as_str() {
                 "motion_mimicry" => {
-                    dispatch_vidu_motion_sync(self, &record, &selection, &inputs).await
+                    dispatch_vidu_motion_sync(provider, &record, &selection, &inputs).await
                 }
-                _ => dispatch_vidu(self, &record, &inputs).await,
+                _ => dispatch_vidu(provider, &record, &inputs).await,
             },
-            "volcengine" | "jimeng" => dispatch_volcengine(self, &record, &inputs).await,
+            "volcengine" | "jimeng" => dispatch_volcengine(provider, &record, &inputs).await,
             other => Err(GenerationsError::Provider(format!(
                 "video vendor {other:?} is not supported by the generations provider adapter"
             ))),
@@ -129,7 +153,11 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
         record: &GenerationRecord,
         _context: &GenerationsRequestContext,
     ) -> Result<Option<GenerationDispatchOutcome>, GenerationsError> {
-        let Some(task_id) = record.source_job_id.as_deref().filter(|v| !v.trim().is_empty()) else {
+        let Some(task_id) = record
+            .source_job_id
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+        else {
             return Ok(None);
         };
         let inputs = GenerationCommandInputs::default();
@@ -148,7 +176,9 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     .gemini_retrieve_video_operation(task_id)
                     .await
                     .map_err(crate::media_sdk_error)?;
-                Ok(Some(outcome_from_gemini_operation(record, &operation, &inputs)))
+                Ok(Some(outcome_from_gemini_operation(
+                    record, &operation, &inputs,
+                )))
             }
             "kling" => {
                 let task = self
@@ -178,9 +208,7 @@ impl GenerationProvider for VideoGenerationProviderAdapter {
                     GenerationStatus::Succeeded => {
                         succeeded_outcome(record, results, Some(usage), Vec::new())
                     }
-                    GenerationStatus::Failed => {
-                        failed_outcome(record, "vidu video task failed")
-                    }
+                    GenerationStatus::Failed => failed_outcome(record, "vidu video task failed"),
                     _ => pending_outcome(record, task_id, Vec::new()),
                 }))
             }
@@ -288,7 +316,9 @@ async fn dispatch_gemini(
             "veo does not support video_extend".to_string(),
         ));
     }
-    if record.operation_type == "image_to_video" || inputs.generation_mode.as_deref() == Some("image_to_video") {
+    if record.operation_type == "image_to_video"
+        || inputs.generation_mode.as_deref() == Some("image_to_video")
+    {
         return Err(GenerationsError::InvalidInput(
             "veo image_to_video requires base64-encoded image input, which generation commands do not carry; use text_to_video".to_string(),
         ));
@@ -304,7 +334,8 @@ async fn dispatch_gemini(
     let model = model_or_default(inputs, "veo-3.0-generate-001");
     validate_video_duration("google", &model, &record.operation_type, inputs)
         .map_err(GenerationsError::InvalidInput)?;
-    validate_video_aspect_ratio("google", &model, inputs).map_err(GenerationsError::InvalidInput)?;
+    validate_video_aspect_ratio("google", &model, inputs)
+        .map_err(GenerationsError::InvalidInput)?;
     let parameters = GeminiVideoParameters {
         aspect_ratio: inputs.aspect_ratio.clone(),
         duration_seconds: inputs.duration_seconds.map(|value| value as i64),
@@ -347,14 +378,12 @@ fn outcome_from_gemini_operation(
         if uris.is_empty() {
             return failed_outcome(
                 record,
-                &operation.filtered_reason()
+                &operation
+                    .filtered_reason()
                     .unwrap_or_else(|| "veo video operation finished without media".to_string()),
             );
         }
-        let results = uris
-            .iter()
-            .map(|uri| video_result(record, uri))
-            .collect();
+        let results = uris.iter().map(|uri| video_result(record, uri)).collect();
         let mut usage = GenerationUsage::new("google");
         usage.model = record
             .source_job_id
@@ -370,7 +399,11 @@ fn outcome_from_gemini_operation(
         else {
             return failed_outcome(record, "veo operation response is missing name");
         };
-        pending_outcome(record, &operation_name, vec![task_event(record, &operation_name)])
+        pending_outcome(
+            record,
+            &operation_name,
+            vec![task_event(record, &operation_name)],
+        )
     }
 }
 
@@ -378,11 +411,7 @@ fn outcome_from_gemini_operation(
 /// (`models/{model}/operations/{operation}`).
 fn extract_model_from_operation_name(operation_name: &str) -> Option<String> {
     let trimmed = operation_name.trim().trim_start_matches('/');
-    let model = trimmed
-        .strip_prefix("models/")?
-        .split('/')
-        .next()?
-        .trim();
+    let model = trimmed.strip_prefix("models/")?.split('/').next()?.trim();
     (!model.is_empty()).then(|| model.to_owned())
 }
 
@@ -489,7 +518,11 @@ async fn dispatch_kling_avatar(
         human_image,
         model_name: (!selection.model.is_empty()).then(|| selection.model.clone()),
         prompt: (!inputs.prompt.is_empty()).then(|| inputs.prompt.clone()),
-        text: if voice_mode == "tts" { audio_text } else { None },
+        text: if voice_mode == "tts" {
+            audio_text
+        } else {
+            None
+        },
         voice_id: inputs.voice_id.clone().or_else(|| inputs.voice.clone()),
         voice_language: inputs.language.clone(),
         voice_mode: Some(voice_mode),
@@ -587,12 +620,20 @@ async fn dispatch_vidu_motion_sync(
         .vidu_create_template(&request)
         .await
         .map_err(crate::media_sdk_error)?;
-    let Some(task_id) = task.task_id.as_deref().filter(|value| !value.trim().is_empty()) else {
+    let Some(task_id) = task
+        .task_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
         return Err(GenerationsError::Provider(
             "vidu task response is missing task_id".to_string(),
         ));
     };
-    Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)]))
+    Ok(pending_outcome(
+        record,
+        task_id,
+        vec![task_event(record, task_id)],
+    ))
 }
 
 async fn dispatch_vidu(
@@ -732,12 +773,20 @@ async fn dispatch_vidu(
                 .map_err(crate::media_sdk_error)?
         }
     };
-    let Some(task_id) = task.task_id.as_deref().filter(|value| !value.trim().is_empty()) else {
+    let Some(task_id) = task
+        .task_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
         return Err(GenerationsError::Provider(
             "vidu task response is missing task_id".to_string(),
         ));
     };
-    Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)]))
+    Ok(pending_outcome(
+        record,
+        task_id,
+        vec![task_event(record, task_id)],
+    ))
 }
 
 async fn dispatch_volcengine(
@@ -789,7 +838,8 @@ async fn dispatch_volcengine(
                 }
                 _ => {
                     return Err(GenerationsError::InvalidInput(
-                        "seedance start_end_frame requires first and last frame references".to_string(),
+                        "seedance start_end_frame requires first and last frame references"
+                            .to_string(),
                     ))
                 }
             }
@@ -844,8 +894,9 @@ async fn dispatch_volcengine(
         model: model_or_default(inputs, "doubao-seedance-1-0-lite-t2v-250428"),
         ..Default::default()
     };
-    let mut body = serde_json::to_value(&request)
-        .map_err(|error| GenerationsError::Internal(format!("seedance request failed to serialize: {error}")))?;
+    let mut body = serde_json::to_value(&request).map_err(|error| {
+        GenerationsError::Internal(format!("seedance request failed to serialize: {error}"))
+    })?;
     // Official Volcengine Ark Seedance contract: the render knobs ride as
     // top-level body fields. The previous dispatch dropped them, so the
     // vendor rendered its defaults and the gateway could not see the
@@ -888,7 +939,11 @@ async fn dispatch_volcengine(
             "volcengine task response is missing task_id".to_string(),
         ));
     };
-    Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)]))
+    Ok(pending_outcome(
+        record,
+        task_id,
+        vec![task_event(record, task_id)],
+    ))
 }
 
 fn outcome_from_openai_video(
@@ -939,22 +994,27 @@ fn outcome_from_media_task(
                 .filter_map(|entry| entry.url.clone().or_else(|| entry.uri.clone()))
                 .map(|url| video_result(record, &url))
                 .collect();
-            let mut usage = usage_from_media(vendor, &GenerationCommandInputs::default(), &media, MediaUsageKind::Video);
+            let mut usage = usage_from_media(
+                vendor,
+                &GenerationCommandInputs::default(),
+                &media,
+                MediaUsageKind::Video,
+            );
             // The refresh path no longer holds the original command, so the
             // vendor-reported model is the only metering model source here.
-            if let Some(model) = vendor_model.map(str::trim).filter(|model| !model.is_empty()) {
+            if let Some(model) = vendor_model
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+            {
                 usage.model = Some(model.to_string());
             }
             succeeded_outcome(record, results, Some(usage), Vec::new())
         }
-        GenerationStatus::Failed => {
-            failed_outcome(record, &error.unwrap_or_else(|| format!("{vendor} video task failed")))
-        }
-        _ => pending_outcome(
+        GenerationStatus::Failed => failed_outcome(
             record,
-            task_id.unwrap_or_default(),
-            Vec::new(),
+            &error.unwrap_or_else(|| format!("{vendor} video task failed")),
         ),
+        _ => pending_outcome(record, task_id.unwrap_or_default(), Vec::new()),
     }
 }
 
@@ -982,10 +1042,14 @@ fn finish_media_task_dispatch(
             let usage = usage_from_media(vendor, inputs, &media, MediaUsageKind::Video);
             Ok(succeeded_outcome(record, results, Some(usage), Vec::new()))
         }
-        GenerationStatus::Failed => Err(GenerationsError::Provider(error.unwrap_or_else(
-            || format!("vendor task {task_id} failed"),
-        ))),
-        _ => Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)])),
+        GenerationStatus::Failed => Err(GenerationsError::Provider(
+            error.unwrap_or_else(|| format!("vendor task {task_id} failed")),
+        )),
+        _ => Ok(pending_outcome(
+            record,
+            task_id,
+            vec![task_event(record, task_id)],
+        )),
     }
 }
 
@@ -996,12 +1060,7 @@ fn vidu_results(
     task.creations
         .iter()
         .flatten()
-        .filter_map(|creation| {
-            creation
-                .video_url
-                .clone()
-                .or_else(|| creation.url.clone())
-        })
+        .filter_map(|creation| creation.video_url.clone().or_else(|| creation.url.clone()))
         .map(|url| video_result(record, &url))
         .collect()
 }
@@ -1103,7 +1162,9 @@ mod video_lifecycle_tests {
 
     const OPERATION_NAME: &str = "models/veo-3.0-generate-001/operations/op-1";
 
-    fn sample_record(operation_type: &str) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
+    fn sample_record(
+        operation_type: &str,
+    ) -> sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
         sdkwork_intelligence_generations_service::domain::models::GenerationRecord {
             conversation_id: None,
             id: "gen-1".to_string(),
@@ -1198,7 +1259,10 @@ mod video_lifecycle_tests {
             .expect("gemini request captured");
         assert_eq!(model, "veo-3.0-generate-001");
         assert_eq!(request.instances.len(), 1);
-        assert_eq!(request.instances[0].prompt, "a drone shot over rice terraces");
+        assert_eq!(
+            request.instances[0].prompt,
+            "a drone shot over rice terraces"
+        );
 
         assert_eq!(outcome.record.status, GenerationStatus::Running);
         assert_eq!(
@@ -1245,7 +1309,8 @@ mod video_lifecycle_tests {
 
     #[tokio::test]
     async fn veo_image_to_video_is_rejected_with_guidance() {
-        let provider = VideoGenerationProviderAdapter::new(Arc::new(ScriptedGateway::default()), "openai");
+        let provider =
+            VideoGenerationProviderAdapter::new(Arc::new(ScriptedGateway::default()), "openai");
         let mut command = command("google/veo-3.0-generate-001");
         command.parameters = Some(serde_json::json!({
             "referenceImages": [{ "url": "https://cdn.example/first-frame.png" }]
@@ -1306,7 +1371,9 @@ mod video_lifecycle_tests {
             .dispatch(&sample_record("motion_mimicry"), &command, &context())
             .await
             .expect_err("motion_mimicry on volcengine must be rejected");
-        assert!(error.to_string().contains("motion_mimicry is not supported"));
+        assert!(error
+            .to_string()
+            .contains("motion_mimicry is not supported"));
     }
 
     #[tokio::test]
@@ -1370,11 +1437,12 @@ mod video_lifecycle_tests {
     #[tokio::test]
     async fn kling_motion_control_maps_image_and_reference_video() {
         let gateway = Arc::new(ScriptedGateway::default());
-        *gateway.kling_motion_control_create_task.lock().unwrap() = Some(KlingVideoGenerationTask {
-            task_id: Some("kling-motion-1".to_string()),
-            state: Some("submitted".to_string()),
-            ..Default::default()
-        });
+        *gateway.kling_motion_control_create_task.lock().unwrap() =
+            Some(KlingVideoGenerationTask {
+                task_id: Some("kling-motion-1".to_string()),
+                state: Some("submitted".to_string()),
+                ..Default::default()
+            });
         let provider = VideoGenerationProviderAdapter::new(gateway.clone(), "openai");
 
         let mut command = command("kling/kling-v3");
@@ -1387,7 +1455,10 @@ mod video_lifecycle_tests {
             .await
             .expect("kling motion control dispatch pends");
         assert_eq!(outcome.record.status, GenerationStatus::Running);
-        assert_eq!(outcome.record.source_job_id.as_deref(), Some("kling-motion-1"));
+        assert_eq!(
+            outcome.record.source_job_id.as_deref(),
+            Some("kling-motion-1")
+        );
         let request = gateway
             .last_kling_motion_control_request
             .lock()
@@ -1420,7 +1491,10 @@ mod video_lifecycle_tests {
             .expect("vidu motion sync dispatch pends");
         assert_eq!(outcome.record.status, GenerationStatus::Running);
         assert_eq!(outcome.record.source_provider.as_deref(), Some("vidu"));
-        assert_eq!(outcome.record.source_job_id.as_deref(), Some("vidu-motion-1"));
+        assert_eq!(
+            outcome.record.source_job_id.as_deref(),
+            Some("vidu-motion-1")
+        );
         let request = gateway
             .last_vidu_template_request
             .lock()
@@ -1431,7 +1505,11 @@ mod video_lifecycle_tests {
         assert_eq!(request.images, vec!["https://cdn.example/person.png"]);
         assert_eq!(
             request.video_urls.as_deref(),
-            Some(["https://cdn.example/dance.mp4"].map(str::to_string).as_slice())
+            Some(
+                ["https://cdn.example/dance.mp4"]
+                    .map(str::to_string)
+                    .as_slice()
+            )
         );
     }
 
@@ -1465,15 +1543,14 @@ mod video_lifecycle_tests {
             "generationConfig": { "durationSeconds": 8 }
         }));
         let created = provider
-            .dispatch(
-                &sample_record("text_to_video"),
-                &kling_command,
-                &context(),
-            )
+            .dispatch(&sample_record("text_to_video"), &kling_command, &context())
             .await
             .expect("kling dispatch pends");
         assert_eq!(created.record.status, GenerationStatus::Running);
-        assert_eq!(created.record.source_job_id.as_deref(), Some("kling-task-7"));
+        assert_eq!(
+            created.record.source_job_id.as_deref(),
+            Some("kling-task-7")
+        );
         assert_eq!(
             created.record.source_provider.as_deref(),
             Some("kling"),
@@ -1505,7 +1582,12 @@ mod video_lifecycle_tests {
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(outcome.results.len(), 1);
         assert_eq!(
-            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            outcome.results[0]
+                .resource_snapshot
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
             Some("https://cdn.example/kling-final.mp4")
         );
     }
@@ -1556,7 +1638,12 @@ mod video_lifecycle_tests {
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(outcome.results.len(), 1);
         assert_eq!(
-            outcome.results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+            outcome.results[0]
+                .resource_snapshot
+                .as_ref()
+                .unwrap()
+                .url
+                .as_deref(),
             Some("https://cdn.example/sora-final.mp4")
         );
     }
@@ -1647,11 +1734,7 @@ mod video_lifecycle_tests {
             ]
         }));
         let outcome = provider
-            .dispatch(
-                &sample_record("image_to_video"),
-                &command,
-                &context(),
-            )
+            .dispatch(&sample_record("image_to_video"), &command, &context())
             .await
             .expect("seedance dispatch succeeds");
 
@@ -1678,7 +1761,11 @@ mod video_lifecycle_tests {
         );
         // Render knobs must reach the vendor body as top-level fields so the
         // vendor honors them and the gateway prices the requested tier.
-        assert_eq!(request["resolution"], serde_json::json!(null), "no resolution declared");
+        assert_eq!(
+            request["resolution"],
+            serde_json::json!(null),
+            "no resolution declared"
+        );
         assert_eq!(request.get("ratio"), None, "no ratio declared");
         assert_eq!(request.get("duration"), None, "no duration declared");
         let text_parts = request["content"]
@@ -1689,7 +1776,10 @@ mod video_lifecycle_tests {
             .count();
         assert_eq!(text_parts, 1, "the prompt rides exactly one text part");
         assert_eq!(outcome.record.status, GenerationStatus::Running);
-        assert_eq!(outcome.record.source_job_id.as_deref(), Some("seedance-task-1"));
+        assert_eq!(
+            outcome.record.source_job_id.as_deref(),
+            Some("seedance-task-1")
+        );
     }
 
     #[tokio::test]
@@ -1738,7 +1828,11 @@ mod video_lifecycle_tests {
             "generationConfig": { "audio": false, "resolution": "720p", "durationSeconds": 4 }
         }));
         seedance
-            .dispatch(&sample_record("text_to_video"), &seedance_command, &context())
+            .dispatch(
+                &sample_record("text_to_video"),
+                &seedance_command,
+                &context(),
+            )
             .await
             .expect("seedance dispatch succeeds");
         let body = seedance_gateway
@@ -1762,8 +1856,7 @@ mod video_lifecycle_tests {
             "referenceImages": [{ "url": "https://cdn.example/character.png" }],
             "generationConfig": { "audio": true, "durationSeconds": 5 }
         }));
-        vidu
-            .dispatch(&sample_record("image_to_video"), &vidu_command, &context())
+        vidu.dispatch(&sample_record("image_to_video"), &vidu_command, &context())
             .await
             .expect("vidu dispatch succeeds");
         let (_, request) = vidu_gateway
@@ -1811,16 +1904,27 @@ mod video_lifecycle_tests {
             .expect("content array")
             .iter()
             .filter(|part| part["type"] == "image_url")
-            .map(|part| (
-                part["image_url"]["url"].as_str().unwrap_or_default().to_string(),
-                part["role"].as_str().unwrap_or_default().to_string(),
-            ))
+            .map(|part| {
+                (
+                    part["image_url"]["url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    part["role"].as_str().unwrap_or_default().to_string(),
+                )
+            })
             .collect();
         assert_eq!(
             parts,
             vec![
-                ("https://cdn.example/first.png".to_string(), "first_frame".to_string()),
-                ("https://cdn.example/last.png".to_string(), "last_frame".to_string()),
+                (
+                    "https://cdn.example/first.png".to_string(),
+                    "first_frame".to_string()
+                ),
+                (
+                    "https://cdn.example/last.png".to_string(),
+                    "last_frame".to_string()
+                ),
             ],
             "first and last frames carry their catalog roles"
         );
@@ -1864,7 +1968,10 @@ mod video_lifecycle_tests {
             .filter(|part| part["type"] == "image_url")
             .filter_map(|part| part["role"].as_str())
             .collect();
-        assert_eq!(roles, vec!["reference_image", "reference_image", "reference_image"]);
+        assert_eq!(
+            roles,
+            vec!["reference_image", "reference_image", "reference_image"]
+        );
     }
 
     #[tokio::test]
@@ -1896,9 +2003,19 @@ mod video_lifecycle_tests {
             .unwrap()
             .clone()
             .expect("kling request captured");
-        assert_eq!(request.image.as_deref(), Some("https://cdn.example/start.jpg"));
-        assert_eq!(request.image_tail.as_deref(), Some("https://cdn.example/end.jpg"));
-        assert_eq!(request.mode.as_deref(), Some("pro"), "1080p maps to Kling pro mode");
+        assert_eq!(
+            request.image.as_deref(),
+            Some("https://cdn.example/start.jpg")
+        );
+        assert_eq!(
+            request.image_tail.as_deref(),
+            Some("https://cdn.example/end.jpg")
+        );
+        assert_eq!(
+            request.mode.as_deref(),
+            Some("pro"),
+            "1080p maps to Kling pro mode"
+        );
         assert_eq!(request.duration, Some(5));
     }
 
@@ -1934,7 +2051,10 @@ mod video_lifecycle_tests {
         assert_eq!(surface, "reference2video");
         assert_eq!(
             request["images"],
-            serde_json::json!(["https://cdn.example/character.png", "https://cdn.example/prop.png"])
+            serde_json::json!([
+                "https://cdn.example/character.png",
+                "https://cdn.example/prop.png"
+            ])
         );
         assert_eq!(request["resolution"], serde_json::json!("720p"));
     }
@@ -1971,7 +2091,48 @@ mod video_lifecycle_tests {
         assert_eq!(surface, "start_end2video");
         assert_eq!(
             request["images"],
-            serde_json::json!(["https://cdn.example/start.png", "https://cdn.example/end.png"])
+            serde_json::json!([
+                "https://cdn.example/start.png",
+                "https://cdn.example/end.png"
+            ])
+        );
+    }
+}
+
+#[cfg(test)]
+mod caller_binding_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct RecordingGateway {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl MediaSdkGateway for RecordingGateway {
+        fn with_caller(&self, caller: &CallerCredentials) -> Arc<dyn MediaSdkGateway> {
+            self.seen.lock().unwrap().push(caller.fingerprint());
+            Arc::new(RecordingGateway {
+                seen: Arc::clone(&self.seen),
+            })
+        }
+    }
+
+    #[test]
+    fn binding_a_caller_rebinds_the_gateway_with_the_credential_fingerprint() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let adapter = VideoGenerationProviderAdapter::new(
+            Arc::new(RecordingGateway {
+                seen: Arc::clone(&seen),
+            }),
+            "vidu",
+        );
+        let caller = CallerCredentials::new(Some("auth".to_owned()), Some("access".to_owned()));
+        let _bound = adapter.bind_caller(&caller);
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [caller.fingerprint()],
+            "a user-scoped video dispatch binds the gateway to the caller identity"
         );
     }
 }

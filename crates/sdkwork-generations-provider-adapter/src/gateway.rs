@@ -12,20 +12,21 @@ use cloudrouter_open_sdk::models::{
     ElevenLabsSoundGenerationRequest, ElevenLabsSoundGenerationResponse,
     ElevenLabsTextToSpeechRequest, ElevenLabsTextToSpeechResponse, KlingAvatarCreateRequest,
     KlingMotionControlRequest, KlingVideoGenerationRequest, KlingVideoGenerationTask,
-    MiniMaxMusicGenerationRequest, MiniMaxMusicGenerationResponse,
-    OpenAiAudioTranscription, OpenAiAudioTranscriptionRequest,
-    OpenAiAudioTranslation, OpenAiAudioTranslationRequest, OpenAiImageEditRequest,
-    OpenAiImageGenerationRequest, OpenAiImageList, OpenAiSpeechCreateRequest, OpenAiVideo,
-    OpenAiVideoCreateRequest, OpenAiVideoExtendRequest, ProviderGeneratedMedia, ProviderTaskError,
-    SunoMusicGenerationRequest, SunoMusicGenerationResponse, SunoMusicGenerationTaskResponse,
-    ViduImageGenerationTask, ViduImageToVideoRequest, ViduReferenceToImageRequest,
-    ViduReferenceToVideoRequest, ViduStartEndToVideoRequest, ViduTaskCreationsResponse,
-    ViduTemplateRequest, ViduTemplateTask, ViduTextToVideoRequest, ViduVideoGenerationTask,
-    VolcengineContentGenerationTask, VolcengineContentGenerationTaskCreateRequest,
-    VolcengineContentGenerationTaskCreateResponse,
+    MiniMaxMusicGenerationRequest, MiniMaxMusicGenerationResponse, OpenAiAudioTranscription,
+    OpenAiAudioTranscriptionRequest, OpenAiAudioTranslation, OpenAiAudioTranslationRequest,
+    OpenAiImageEditRequest, OpenAiImageGenerationRequest, OpenAiImageList,
+    OpenAiSpeechCreateRequest, OpenAiVideo, OpenAiVideoCreateRequest, OpenAiVideoExtendRequest,
+    ProviderGeneratedMedia, ProviderTaskError, SunoMusicGenerationRequest,
+    SunoMusicGenerationResponse, SunoMusicGenerationTaskResponse, ViduImageGenerationTask,
+    ViduImageToVideoRequest, ViduReferenceToImageRequest, ViduReferenceToVideoRequest,
+    ViduStartEndToVideoRequest, ViduTaskCreationsResponse, ViduTemplateRequest, ViduTemplateTask,
+    ViduTextToVideoRequest, ViduVideoGenerationTask, VolcengineContentGenerationTask,
+    VolcengineContentGenerationTaskCreateRequest, VolcengineContentGenerationTaskCreateResponse,
 };
 use cloudrouter_open_sdk::{SdkworkAiClient, SdkworkError};
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Connection settings for the cloudrouter media gateway.
 #[derive(Debug, Clone)]
@@ -42,6 +43,11 @@ pub struct GatewaySettings {
 
 impl GatewaySettings {
     /// Load gateway settings from the environment.
+    ///
+    /// These values are the **declared service identity** for caller-less
+    /// (background/worker) dispatches only. A caller-bound dispatch carries the
+    /// verified caller pair and never presents these values
+    /// (`identity:service` — see [`media_credential_headers`]).
     pub fn from_env() -> Self {
         Self {
             base_url: std::env::var("GENERATIONS_MEDIA_GATEWAY_BASE_URL")
@@ -57,6 +63,16 @@ impl GatewaySettings {
 #[async_trait]
 #[allow(unused_variables)]
 pub trait MediaSdkGateway: Send + Sync {
+    /// Returns a gateway bound to the caller's verified dual credentials for
+    /// one dispatch (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+    ///
+    /// A user-scoped generation call must authenticate as that user, never as
+    /// the deployment. The bound handle keeps the same registry target and the
+    /// same client pool, and its pooled clients are keyed by
+    /// `(base URL, credential fingerprint)` so one caller's client can never be
+    /// reused with another caller's tokens.
+    fn with_caller(&self, caller: &CallerCredentials) -> Arc<dyn MediaSdkGateway>;
+
     // -- Image --------------------------------------------------------------
 
     async fn openai_create_image_generation(
@@ -443,45 +459,54 @@ pub trait MediaSdkGateway: Send + Sync {
 /// configured URL remains the degradation fallback.
 pub struct CloudRouterMediaGateway {
     settings: GatewaySettings,
-    clients: std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<SdkworkAiClient>>>,
+    clients: std::sync::Arc<
+        std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<SdkworkAiClient>>>,
+    >,
+    /// Verified caller credentials for this handle; empty for a service-scoped
+    /// (background/worker) dispatch that uses the declared deployment identity.
+    caller: CallerCredentials,
 }
 
 impl CloudRouterMediaGateway {
     /// Build a gateway from explicit settings.
     pub fn new(settings: &GatewaySettings) -> Result<Self, SdkworkError> {
-        let (base_url, client) = build_media_client(settings, &settings.base_url)?;
+        let caller = CallerCredentials::default();
+        let (key, client) = build_media_client(settings, &settings.base_url, &caller)?;
         let mut clients = std::collections::HashMap::new();
-        clients.insert(base_url, client);
+        clients.insert(key, client);
         Ok(Self {
             settings: settings.clone(),
-            clients: std::sync::RwLock::new(clients),
+            clients: std::sync::Arc::new(std::sync::RwLock::new(clients)),
+            caller,
         })
     }
 
-    /// Returns the pooled SDK client for the currently selected registry target.
+    /// Returns the pooled SDK client for the currently selected registry target
+    /// and this handle's caller identity.
     fn client(&self) -> Result<std::sync::Arc<SdkworkAiClient>, SdkworkError> {
         let desired = sdkwork_utils_rust::service_base_url::registry_base_url_or(
             "cloudrouter",
             &self.settings.base_url,
         );
+        let key = client_key(&desired, &self.caller);
         if let Some(client) = self
             .clients
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&desired)
+            .get(&key)
             .cloned()
         {
             return Ok(client);
         }
-        let (base_url, client) = build_media_client(&self.settings, &desired)?;
+        let (key, client) = build_media_client(&self.settings, &desired, &self.caller)?;
         let mut clients = self
             .clients
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if clients.len() >= 16 {
+        if clients.len() >= MAX_POOLED_MEDIA_CLIENTS {
             clients.clear();
         }
-        clients.insert(base_url, std::sync::Arc::clone(&client));
+        clients.insert(key, std::sync::Arc::clone(&client));
         Ok(client)
     }
 
@@ -499,38 +524,91 @@ impl CloudRouterMediaGateway {
     }
 }
 
-fn build_media_client(
+/// Upper bound on the per-`(base URL, credential)` client pool. A bounded pool
+/// that is cleared under pressure is preferable to unbounded per-caller growth.
+const MAX_POOLED_MEDIA_CLIENTS: usize = 64;
+
+/// Pool key: the resolved target plus a non-reversible credential fingerprint.
+fn client_key(base_url: &str, caller: &CallerCredentials) -> String {
+    format!("{base_url}|{}", caller.fingerprint())
+}
+
+/// Headers one media call authenticates with.
+///
+/// A caller-bound handle always carries **only** the caller's dual tokens
+/// (`Authorization` bearer + `Access-Token`); a handle without a caller is a
+/// background/worker dispatch and uses the explicitly declared deployment
+/// identity from [`GatewaySettings`]. The two never mix: a caller-bound call
+/// must not additionally present a process API key or service token
+/// (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+fn media_credential_headers(
     settings: &GatewaySettings,
-    configured_base_url: &str,
-) -> Result<(String, std::sync::Arc<SdkworkAiClient>), SdkworkError> {
-    // DISCOVERY_SPEC §12.1: a healthy registry instance wins over the
-    // configured topology URL; the configured URL is the degradation path.
-    let base_url =
-        sdkwork_utils_rust::service_base_url::registry_base_url_or("cloudrouter", configured_base_url);
-    let client = SdkworkAiClient::new_with_base_url(base_url.clone())?;
-    if let Some(auth_token) = settings.auth_token.as_deref().filter(|v| !v.trim().is_empty()) {
-        client.set_auth_token(auth_token);
+    caller: &CallerCredentials,
+) -> Vec<(&'static str, String)> {
+    if !caller.is_empty() {
+        return caller.wire_headers();
     }
+    // Declared service identity for background/worker dispatch only.
+    if let Some(api_key) = settings
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        // The gateway's open-api face classifies an `Authorization` bearer as
+        // one half of a dual-token pair and rejects it without an Access-Token.
+        // A server-to-server gateway API key must travel in `X-Api-Key`, which
+        // selects the API-key authentication branch.
+        return vec![("X-Api-Key", api_key.to_owned())];
+    }
+    let mut headers = Vec::new();
     if let Some(access_token) = settings
         .access_token
         .as_deref()
-        .filter(|v| !v.trim().is_empty())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
-        client.set_access_token(access_token);
+        headers.push(("Access-Token", access_token.to_owned()));
     }
-    if let Some(api_key) = settings.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
-        // The gateway's open-api face classifies an `Authorization` bearer
-        // as one half of a dual-token pair and rejects it when no
-        // Access-Token accompanies it. Server-to-server gateway API keys
-        // must therefore travel in the dedicated `X-Api-Key` header, which
-        // selects the API-key authentication branch.
-        client.set_header("X-Api-Key", api_key);
+    if let Some(auth_token) = settings
+        .auth_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        headers.push(("Authorization", format!("Bearer {auth_token}")));
     }
-    Ok((base_url, std::sync::Arc::new(client)))
+    headers
+}
+
+fn build_media_client(
+    settings: &GatewaySettings,
+    configured_base_url: &str,
+    caller: &CallerCredentials,
+) -> Result<(String, std::sync::Arc<SdkworkAiClient>), SdkworkError> {
+    // DISCOVERY_SPEC §12.1: a healthy registry instance wins over the
+    // configured topology URL; the configured URL is the degradation path.
+    let base_url = sdkwork_utils_rust::service_base_url::registry_base_url_or(
+        "cloudrouter",
+        configured_base_url,
+    );
+    let client = SdkworkAiClient::new_with_base_url(base_url.clone())?;
+    for (name, value) in media_credential_headers(settings, caller) {
+        client.set_header(name, value);
+    }
+    Ok((client_key(&base_url, caller), std::sync::Arc::new(client)))
 }
 
 #[async_trait]
 impl MediaSdkGateway for CloudRouterMediaGateway {
+    fn with_caller(&self, caller: &CallerCredentials) -> Arc<dyn MediaSdkGateway> {
+        Arc::new(CloudRouterMediaGateway {
+            settings: self.settings.clone(),
+            clients: Arc::clone(&self.clients),
+            caller: caller.clone(),
+        })
+    }
+
     async fn openai_create_image_generation(
         &self,
         body: &OpenAiImageGenerationRequest,
@@ -581,7 +659,10 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         task_id: &str,
     ) -> Result<ViduTaskCreationsResponse, SdkworkError> {
-        self.client()?.videos_vidu().list_ent_v2_tasks_creations(task_id).await
+        self.client()?
+            .videos_vidu()
+            .list_ent_v2_tasks_creations(task_id)
+            .await
     }
 
     async fn kling_create_image_generation(
@@ -593,7 +674,13 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         // OpenAI `/v1` prefix and land the call on the wrong pipeline face.
         self.client()?
             .http_client()
-            .post("/kling/v1/images/generations", Some(body), None, None, Some("application/json"))
+            .post(
+                "/kling/v1/images/generations",
+                Some(body),
+                None,
+                None,
+                Some("application/json"),
+            )
             .await
     }
 
@@ -603,11 +690,7 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
     ) -> Result<ProviderImageGenerationTask, SdkworkError> {
         self.client()?
             .http_client()
-            .get(
-                &format!("/kling/v1/tasks/{task_id}"),
-                None,
-                None,
-            )
+            .get(&format!("/kling/v1/tasks/{task_id}"), None, None)
             .await
     }
 
@@ -695,7 +778,10 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &KlingVideoGenerationRequest,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
-        self.client()?.videos_kling().create_v1_videos_generation(body).await
+        self.client()?
+            .videos_kling()
+            .create_v1_videos_generation(body)
+            .await
     }
 
     async fn kling_retrieve_video_generation(
@@ -712,7 +798,10 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &KlingAvatarCreateRequest,
     ) -> Result<KlingVideoGenerationTask, SdkworkError> {
-        self.client()?.videos_kling().create_v1_videos_avatar(body).await
+        self.client()?
+            .videos_kling()
+            .create_v1_videos_avatar(body)
+            .await
     }
 
     async fn kling_create_motion_control(
@@ -729,21 +818,30 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &ViduTemplateRequest,
     ) -> Result<ViduTemplateTask, SdkworkError> {
-        self.client()?.videos_vidu().create_ent_v2_template(body).await
+        self.client()?
+            .videos_vidu()
+            .create_ent_v2_template(body)
+            .await
     }
 
     async fn vidu_create_text_to_video(
         &self,
         body: &ViduTextToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
-        self.client()?.videos_vidu().create_ent_v2_text2video(body).await
+        self.client()?
+            .videos_vidu()
+            .create_ent_v2_text2video(body)
+            .await
     }
 
     async fn vidu_create_image_to_video(
         &self,
         body: &ViduImageToVideoRequest,
     ) -> Result<ViduVideoGenerationTask, SdkworkError> {
-        self.client()?.videos_vidu().create_ent_v2_img2video(body).await
+        self.client()?
+            .videos_vidu()
+            .create_ent_v2_img2video(body)
+            .await
     }
 
     async fn vidu_create_reference_to_video(
@@ -770,7 +868,10 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         task_id: &str,
     ) -> Result<ViduTaskCreationsResponse, SdkworkError> {
-        self.client()?.videos_vidu().list_ent_v2_tasks_creations(task_id).await
+        self.client()?
+            .videos_vidu()
+            .list_ent_v2_tasks_creations(task_id)
+            .await
     }
 
     async fn volcengine_create_video_task(
@@ -835,7 +936,10 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
     ) -> Result<GeminiVideoOperation, SdkworkError> {
         // The long-running operation name is a relative resource path
         // (`models/{model}/operations/{id}`); its separators must survive.
-        let path = format!("/google/v1beta/{}", operation_name.trim().trim_start_matches('/'));
+        let path = format!(
+            "/google/v1beta/{}",
+            operation_name.trim().trim_start_matches('/')
+        );
         self.client()?.http_client().get(&path, None, None).await
     }
 
@@ -843,14 +947,20 @@ impl MediaSdkGateway for CloudRouterMediaGateway {
         &self,
         body: &SunoMusicGenerationRequest,
     ) -> Result<SunoMusicGenerationResponse, SdkworkError> {
-        self.client()?.music_suno().create_v1_music_generation(body).await
+        self.client()?
+            .music_suno()
+            .create_v1_music_generation(body)
+            .await
     }
 
     async fn suno_retrieve_music_generation(
         &self,
         task_id: &str,
     ) -> Result<SunoMusicGenerationTaskResponse, SdkworkError> {
-        self.client()?.music_suno().list_v1_music_generations(task_id).await
+        self.client()?
+            .music_suno()
+            .list_v1_music_generations(task_id)
+            .await
     }
 
     async fn openai_create_speech(
@@ -890,11 +1000,23 @@ pub struct GeminiVideoInstance {
 /// Tuning parameters for a Veo generation request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeminiVideoParameters {
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "aspectRatio")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "aspectRatio"
+    )]
     pub aspect_ratio: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "durationSeconds")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "durationSeconds"
+    )]
     pub duration_seconds: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "personGeneration")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "personGeneration"
+    )]
     pub person_generation: Option<String>,
 }
 
@@ -929,17 +1051,29 @@ pub struct GeminiVideoAsset {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeminiVideoOperationResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "generateVideoResponse")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "generateVideoResponse"
+    )]
     pub generate_video_response: Option<GeminiVideoGenerateResponse>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeminiVideoGenerateResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "generatedSamples")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "generatedSamples"
+    )]
     pub generated_samples: Option<Vec<GeminiVideoSample>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub videos: Option<Vec<GeminiVideoSample>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "raiMediaFilteredReasons")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "raiMediaFilteredReasons"
+    )]
     pub rai_media_filtered_reasons: Option<Vec<String>>,
 }
 
@@ -967,7 +1101,9 @@ pub struct GeminiVideoOperation {
 impl GeminiVideoOperation {
     /// Operation resource name, usable as the polling identifier.
     pub fn operation_name(&self) -> Option<&str> {
-        self.name.as_deref().filter(|value| !value.trim().is_empty())
+        self.name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
     }
 
     /// Video URIs from a finished operation, if any.
@@ -1003,7 +1139,9 @@ impl GeminiVideoOperation {
         self.response
             .as_ref()
             .and_then(|response| response.generate_video_response.as_ref())
-            .and_then(|generate_video_response| generate_video_response.rai_media_filtered_reasons.as_ref())
+            .and_then(|generate_video_response| {
+                generate_video_response.rai_media_filtered_reasons.as_ref()
+            })
             .and_then(|reasons| reasons.first().cloned())
     }
 }
@@ -1023,11 +1161,23 @@ pub struct GeminiImageGenerationInstance {
 /// Tuning parameters for a Gemini image generation request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeminiImageGenerationParameters {
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sampleCount")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sampleCount"
+    )]
     pub sample_count: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "aspectRatio")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "aspectRatio"
+    )]
     pub aspect_ratio: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "personGeneration")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "personGeneration"
+    )]
     pub person_generation: Option<String>,
 }
 
@@ -1042,7 +1192,11 @@ pub struct GeminiImageGenerationRequest {
 /// One generated image prediction returned by a finished image generation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeminiImagePrediction {
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "bytesBase64Encoded")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "bytesBase64Encoded"
+    )]
     pub bytes_base64_encoded: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "mimeType")]
     pub mime_type: Option<String>,
@@ -1088,10 +1242,7 @@ impl GeminiImageGenerationResponse {
                     .mime_type
                     .clone()
                     .unwrap_or_else(|| "image/png".to_string());
-                Some((
-                    format!("data:{mime_type};base64,{bytes}"),
-                    Some(mime_type),
-                ))
+                Some((format!("data:{mime_type};base64,{bytes}"), Some(mime_type)))
             })
             .collect()
     }
@@ -1318,6 +1469,13 @@ pub mod test_support {
 
     #[async_trait]
     impl MediaSdkGateway for ScriptedGateway {
+        /// Test doubles do not carry credentials: an identity-bound dispatch
+        /// gets a fresh, unscripted double. Tests that need to observe caller
+        /// binding implement their own recording gateway.
+        fn with_caller(&self, _caller: &CallerCredentials) -> Arc<dyn MediaSdkGateway> {
+            Arc::new(ScriptedGateway::default())
+        }
+
         async fn openai_create_image_generation(
             &self,
             body: &OpenAiImageGenerationRequest,
@@ -1494,7 +1652,8 @@ pub mod test_support {
             model: &str,
             body: &GeminiVideoGenerationRequest,
         ) -> Result<GeminiVideoOperation, SdkworkError> {
-            *self.last_gemini_video_request.lock().unwrap() = Some((model.to_string(), body.clone()));
+            *self.last_gemini_video_request.lock().unwrap() =
+                Some((model.to_string(), body.clone()));
             self.gemini_video_operation
                 .lock()
                 .unwrap()
@@ -1509,7 +1668,8 @@ pub mod test_support {
             &self,
             operation_name: &str,
         ) -> Result<GeminiVideoOperation, SdkworkError> {
-            *self.last_gemini_video_operation_name.lock().unwrap() = Some(operation_name.to_string());
+            *self.last_gemini_video_operation_name.lock().unwrap() =
+                Some(operation_name.to_string());
             self.gemini_video_operation
                 .lock()
                 .unwrap()
@@ -1525,10 +1685,8 @@ pub mod test_support {
             model: &str,
             body: &GeminiImageGenerationRequest,
         ) -> Result<GeminiImageGenerationResponse, SdkworkError> {
-            *self
-                .last_gemini_image_request
-                .lock()
-                .unwrap() = Some((model.to_string(), body.clone()));
+            *self.last_gemini_image_request.lock().unwrap() =
+                Some((model.to_string(), body.clone()));
             self.gemini_image_generation
                 .lock()
                 .unwrap()
@@ -1583,7 +1741,10 @@ pub mod test_support {
                 })
         }
 
-        async fn openai_retrieve_video(&self, _video_id: &str) -> Result<OpenAiVideo, SdkworkError> {
+        async fn openai_retrieve_video(
+            &self,
+            _video_id: &str,
+        ) -> Result<OpenAiVideo, SdkworkError> {
             self.openai_video_retrieve
                 .lock()
                 .unwrap()
@@ -1770,5 +1931,72 @@ pub mod test_support {
                     body: "no scripted volcengine video response".to_string(),
                 })
         }
+    }
+}
+
+#[cfg(test)]
+mod caller_identity_tests {
+    use super::*;
+
+    fn service_settings() -> GatewaySettings {
+        GatewaySettings {
+            base_url: "http://127.0.0.1:9".to_owned(),
+            api_key: Some("service-key".to_owned()),
+            auth_token: Some("service-auth".to_owned()),
+            access_token: Some("service-access".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_caller_bound_dispatch_sends_only_the_callers_dual_tokens() {
+        let caller = CallerCredentials::new(
+            Some("caller-auth".to_owned()),
+            Some("caller-access".to_owned()),
+        );
+        let headers = media_credential_headers(&service_settings(), &caller);
+        assert_eq!(
+            headers,
+            vec![
+                ("Authorization", "Bearer caller-auth".to_owned()),
+                ("Access-Token", "caller-access".to_owned()),
+            ],
+            "the caller's verified pair is the only credential on a user-scoped call"
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("x-api-key")),
+            "a caller-bound call must not also present the deployment API key"
+        );
+    }
+
+    #[test]
+    fn a_caller_less_dispatch_keeps_the_declared_service_identity() {
+        let headers = media_credential_headers(&service_settings(), &CallerCredentials::default());
+        assert_eq!(headers, vec![("X-Api-Key", "service-key".to_owned())]);
+    }
+
+    #[test]
+    fn pooled_clients_are_keyed_by_target_and_credential_fingerprint() {
+        let a = CallerCredentials::new(Some("auth-a".to_owned()), None);
+        let b = CallerCredentials::new(Some("auth-b".to_owned()), None);
+        assert_ne!(
+            client_key("http://target:8080", &a),
+            client_key("http://target:8080", &b),
+            "different callers never share a pooled client"
+        );
+        assert_eq!(
+            client_key("http://target:8080", &a),
+            client_key("http://target:8080", &a.clone())
+        );
+        assert_ne!(
+            client_key("http://target-a:8080", &a),
+            client_key("http://target-b:8080", &a)
+        );
+        assert_ne!(
+            client_key("http://target:8080", &a),
+            client_key("http://target:8080", &CallerCredentials::default()),
+            "a service-identity client never mixes with a caller client"
+        );
     }
 }

@@ -18,6 +18,7 @@ use sdkwork_intelligence_generations_service::error::GenerationsError;
 use sdkwork_intelligence_generations_service::ports::{
     GenerationDispatchOutcome, GenerationProvider, GenerationUsage,
 };
+use sdkwork_utils_rust::caller_identity::CallerCredentials;
 
 use crate::gateway::MediaSdkGateway;
 use crate::usage::usage_from_suno_task;
@@ -41,6 +42,15 @@ impl MusicGenerationProviderAdapter {
             default_vendor: default_vendor.into(),
         }
     }
+
+    /// Caller-bound clone: the gateway carries the authenticated caller's dual
+    /// tokens for this dispatch (`APP_SDK_INTEGRATION_SPEC.md` §5.2.1).
+    fn bind_caller(&self, caller: &CallerCredentials) -> Self {
+        Self {
+            gateway: self.gateway.with_caller(caller),
+            default_vendor: self.default_vendor.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -61,16 +71,27 @@ impl GenerationProvider for MusicGenerationProviderAdapter {
         &self,
         record: &GenerationRecord,
         command: &CreateGenerationCommandRequest,
-        _context: &GenerationsRequestContext,
+        context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
+        // A user-initiated dispatch authenticates as the caller; a caller-less
+        // (background/worker) dispatch keeps the declared service identity.
+        let bound;
+        let provider = if context.caller().is_empty() {
+            self
+        } else {
+            bound = self.bind_caller(context.caller());
+            &bound
+        };
         let selection = resolve_vendor(command, &self.default_vendor);
         let inputs = GenerationCommandInputs::from_command(command, &selection);
         // Persist the resolved vendor so the retrieve path polls with the
         // surface that created the task.
         let record = with_resolved_vendor(record, &selection.vendor);
         match selection.vendor.as_str() {
-            "suno" => self::surfaces::dispatch_suno(self, &record, &selection, &inputs).await,
-            "minimax" => self::surfaces::dispatch_minimax(self, &record, &selection, &inputs).await,
+            "suno" => self::surfaces::dispatch_suno(provider, &record, &selection, &inputs).await,
+            "minimax" => {
+                self::surfaces::dispatch_minimax(provider, &record, &selection, &inputs).await
+            }
             other => Err(GenerationsError::Provider(format!(
                 "music vendor {other:?} is not supported by the generations provider adapter"
             ))),
@@ -82,7 +103,11 @@ impl GenerationProvider for MusicGenerationProviderAdapter {
         record: &GenerationRecord,
         _context: &GenerationsRequestContext,
     ) -> Result<Option<GenerationDispatchOutcome>, GenerationsError> {
-        let Some(task_id) = record.source_job_id.as_deref().filter(|v| !v.trim().is_empty()) else {
+        let Some(task_id) = record
+            .source_job_id
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+        else {
             return Ok(None);
         };
         if record.source_provider.as_deref() != Some("suno") {
@@ -109,7 +134,12 @@ impl GenerationProvider for MusicGenerationProviderAdapter {
                     })
                     .collect();
                 let usage = usage_from_suno_task("suno", &inputs, &task);
-                Ok(Some(succeeded_outcome(record, results, Some(usage), Vec::new())))
+                Ok(Some(succeeded_outcome(
+                    record,
+                    results,
+                    Some(usage),
+                    Vec::new(),
+                )))
             }
             GenerationStatus::Failed => Ok(Some(failed_outcome(record, "suno music task failed"))),
             _ => Ok(Some(record_outcome({
@@ -165,7 +195,11 @@ mod surfaces {
                 "suno task {task_id} failed"
             )));
         }
-        Ok(pending_outcome(record, task_id, vec![task_event(record, task_id)]))
+        Ok(pending_outcome(
+            record,
+            task_id,
+            vec![task_event(record, task_id)],
+        ))
     }
 
     pub(super) async fn dispatch_minimax(
@@ -240,7 +274,12 @@ mod surfaces {
         usage.audio_seconds = duration_seconds.unwrap_or_default();
         Ok(succeeded_outcome(
             record,
-            vec![music_result_with_mime(record, audio, mime, duration_seconds)],
+            vec![music_result_with_mime(
+                record,
+                audio,
+                mime,
+                duration_seconds,
+            )],
             Some(usage),
             Vec::new(),
         ))
@@ -249,7 +288,11 @@ mod surfaces {
 
 fn compose_lyrics_prompt(inputs: &GenerationCommandInputs) -> String {
     let mut segments = Vec::new();
-    if let Some(lyrics) = inputs.lyrics.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(lyrics) = inputs
+        .lyrics
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         segments.push(lyrics.to_string());
     }
     segments.push(inputs.prompt.clone());
@@ -497,7 +540,10 @@ mod tests {
         assert_eq!(outcome.record.status, GenerationStatus::Succeeded);
         assert_eq!(outcome.record.source_provider.as_deref(), Some("minimax"));
         let snapshot = outcome.results[0].resource_snapshot.as_ref().unwrap();
-        assert_eq!(snapshot.url.as_deref(), Some("https://cdn.example/song.wav"));
+        assert_eq!(
+            snapshot.url.as_deref(),
+            Some("https://cdn.example/song.wav")
+        );
         assert_eq!(snapshot.content_type.as_deref(), Some("audio/wav"));
         assert_eq!(snapshot.duration_ms, Some(42500));
         let usage = outcome.usage.as_ref().unwrap();
