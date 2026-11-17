@@ -56,7 +56,8 @@
     "_sdkwork:verify": "pnpm run check && pnpm run test",
     "_sdkwork:build": "cargo build --workspace --release && pnpm --dir apps/sdkwork-generations-pc run build:prod && pnpm --dir apps/sdkwork-generations-h5 run build:prod",
     "api:assembly:materialize": "node ../sdkwork-specs/tools/materialize-api-assembly.mjs --root .",
-    "api:assembly:validate": "node ../sdkwork-specs/tools/validate-api-assembly.mjs --root ."
+    "api:assembly:validate": "node ../sdkwork-specs/tools/validate-api-assembly.mjs --root .",
+    "check:release-access-token:require-anchor": "node ../sdkwork-specs/tools/check-release-access-token-env.mjs --root . --require-anchor"
   },
   "devDependencies": {
     "@sdkwork/app-topology": "workspace:*"
