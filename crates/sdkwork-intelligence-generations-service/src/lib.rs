@@ -12,6 +12,10 @@ mod service;
 
 pub use config::{GenerationsConfig, SharedGenerationsConfig};
 pub use context::{GenerationsHttpRequestContext, GenerationsRequestContext};
+pub use domain::delivery::{
+    GenerationDeliveryMode, GenerationDeliverySnapshot, GenerationDeliveryState,
+    DEFAULT_DOWNLOAD_DEADLINE_TTL_PERCENT,
+};
 pub use domain::models::{
     CreateGenerationCommandRequest, FavoriteGenerationRequest, GenerationActionRequest,
     GenerationCommandResponse, GenerationModality, GenerationRecord, GenerationRecordPage,
@@ -24,7 +28,10 @@ pub use domain::pricing::{
     GenerationPricingScope, UnconfiguredGenerationPricingPort,
 };
 pub use error::GenerationsError;
-pub use service::{GenerationsService, GenerationsServiceState, build_app_routes};
+pub use ports::delivery::{
+    DefaultRemoteOnlyDeliveryResolver, GenerationDeliveryResolveRequest, GenerationDeliveryResolver,
+};
+pub use service::{build_app_routes, GenerationsService, GenerationsServiceState};
 
 /// HTTP state alias shared across surfaces.
 pub type GenerationsHttpState = GenerationsServiceState;

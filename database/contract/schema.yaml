@@ -33,3 +33,6 @@ tables:
   - name: generation_outbox_event
     lifecycle_status: active
     owner: generations-platform
+  - name: generation_delivery
+    lifecycle_status: active
+    owner: generations-platform

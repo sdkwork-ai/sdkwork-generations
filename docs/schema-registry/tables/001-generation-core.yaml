@@ -43,3 +43,9 @@ notes:
   - /generations is the app-facing list of generation records and results.
   - Modality commands remain explicit under /generations/images, /generations/videos, /generations/music, and /generations/voice.
   - Global assets are owned by sdkwork-drive /assets; generation_result.asset_id is an alias of the saved Drive node id.
+  - table: generation_delivery
+    purpose: Storage-center delivery policy snapshot resolved at creation time (remote_only by default) and the resulting remote/Drive delivery state.
+    indexes:
+      - ux_generation_delivery_generation
+      - idx_generation_delivery_state_expiry
+      - idx_generation_delivery_tenant_state

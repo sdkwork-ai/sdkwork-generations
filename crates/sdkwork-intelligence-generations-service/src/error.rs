@@ -43,6 +43,14 @@ pub enum GenerationsError {
     #[error("pricing error: {0}")]
     Pricing(String),
 
+    /// The delivery-policy resolver is not wired on this deployment.
+    #[error("generation delivery policy resolution is not configured on this deployment")]
+    DeliveryNotConfigured,
+
+    /// The storage center rejected or failed a delivery-policy resolution.
+    #[error("delivery policy error: {0}")]
+    Delivery(String),
+
     /// Unclassified internal error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -61,6 +69,8 @@ impl GenerationsError {
             Self::RateLimited(_) => 429,
             Self::PricingNotConfigured => 501,
             Self::Pricing(_) => 503,
+            Self::DeliveryNotConfigured => 501,
+            Self::Delivery(_) => 503,
             Self::Internal(_) => 500,
         }
     }
@@ -77,6 +87,8 @@ impl GenerationsError {
             Self::RateLimited(_) => 42901,
             Self::PricingNotConfigured => 50101,
             Self::Pricing(_) => 50301,
+            Self::DeliveryNotConfigured => 50102,
+            Self::Delivery(_) => 50302,
             Self::Internal(_) => 50001,
         }
     }
