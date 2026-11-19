@@ -3684,6 +3684,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdkwork-generations-delivery-adapter"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "sdkwork-intelligence-generations-service",
+ "sdkwork-utils-rust",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "sdkwork-generations-mcp-service"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "sdkwork-generations-delivery-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+sdkwork-intelligence-generations-service = { workspace = true }
+sdkwork-utils-rust = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }

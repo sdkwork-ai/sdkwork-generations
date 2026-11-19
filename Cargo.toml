@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sdkwork-generations-database-host",
     "crates/sdkwork-generations-mcp-service",
+    "crates/sdkwork-generations-delivery-adapter",
     "crates/sdkwork-generations-provider-adapter",
     "crates/sdkwork-intelligence-generations-service",
     "crates/sdkwork-routes-generations-http-shared",
@@ -83,6 +84,7 @@ sdkwork-routes-drive-app-api = { path = "../sdkwork-drive/crates/sdkwork-routes-
 sdkwork-generations-database-host = { path = "crates/sdkwork-generations-database-host" }
 sdkwork-generations-provider-adapter = { path = "crates/sdkwork-generations-provider-adapter" }
 sdkwork-generations-mcp-service = { path = "crates/sdkwork-generations-mcp-service" }
+sdkwork-generations-delivery-adapter = { path = "crates/sdkwork-generations-delivery-adapter" }
 sdkwork-intelligence-generations-service = { path = "crates/sdkwork-intelligence-generations-service", features = ["http-axum", "postgres-sync"] }
 sdkwork-routes-generations-http-shared = { path = "crates/sdkwork-routes-generations-http-shared" }
 sdkwork-routes-generations-app-api = { path = "crates/sdkwork-routes-generations-app-api" }
