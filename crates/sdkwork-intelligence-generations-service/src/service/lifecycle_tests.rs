@@ -83,9 +83,7 @@ impl GenerationRepository for InMemoryGenerationRepository {
             .lock()
             .unwrap()
             .get(id)
-            .filter(|record| {
-                record.tenant_id == scope.tenant_id && record.user_id == scope.user_id
-            })
+            .filter(|record| record.tenant_id == scope.tenant_id && record.user_id == scope.user_id)
             .cloned())
     }
 
@@ -96,16 +94,15 @@ impl GenerationRepository for InMemoryGenerationRepository {
     ) -> Result<(Vec<GenerationRecord>, Option<String>, bool), GenerationsError> {
         // The in-memory double mirrors the Postgres filter semantics so the
         // lifecycle tests exercise the same owner-scoped list contract.
-        let cursor = params
-            .cursor
-            .as_deref()
-            .map(|token| token.split_once('|').map(|(created_at, id)| (created_at.to_owned(), id.to_owned())));
+        let cursor = params.cursor.as_deref().map(|token| {
+            token
+                .split_once('|')
+                .map(|(created_at, id)| (created_at.to_owned(), id.to_owned()))
+        });
         let records = self.records.lock().unwrap();
         let mut items: Vec<GenerationRecord> = records
             .values()
-            .filter(|record| {
-                record.tenant_id == scope.tenant_id && record.user_id == scope.user_id
-            })
+            .filter(|record| record.tenant_id == scope.tenant_id && record.user_id == scope.user_id)
             .filter(|record| {
                 params
                     .conversation_id
@@ -143,7 +140,9 @@ impl GenerationRepository for InMemoryGenerationRepository {
                             .prompt_preview
                             .as_deref()
                             .map(|preview| {
-                                preview.to_lowercase().contains(&needle.trim().to_lowercase())
+                                preview
+                                    .to_lowercase()
+                                    .contains(&needle.trim().to_lowercase())
                             })
                             .unwrap_or(false)
                     })
@@ -195,9 +194,7 @@ impl GenerationRepository for InMemoryGenerationRepository {
             .lock()
             .unwrap()
             .get(id)
-            .filter(|record| {
-                record.tenant_id == scope.tenant_id && record.user_id == scope.user_id
-            })
+            .filter(|record| record.tenant_id == scope.tenant_id && record.user_id == scope.user_id)
             .cloned())
     }
 
@@ -365,7 +362,10 @@ impl AssetPort for NoopAssetPort {
 enum DispatchBehavior {
     /// Pend on a vendor task, persisting the resolved vendor like the real
     /// adapters do via `with_resolved_vendor`.
-    PendOnTask { vendor: &'static str, task_id: &'static str },
+    PendOnTask {
+        vendor: &'static str,
+        task_id: &'static str,
+    },
     /// Complete immediately with a single image result.
     CompleteWithImage { url: &'static str },
     /// Fail the dispatch with a provider error.
@@ -420,7 +420,12 @@ impl ScriptedProvider {
     }
 }
 
-fn media_resource(kind: &str, content_type: &str, url: &str, duration_ms: Option<i64>) -> crate::domain::models::MediaResource {
+fn media_resource(
+    kind: &str,
+    content_type: &str,
+    url: &str,
+    duration_ms: Option<i64>,
+) -> crate::domain::models::MediaResource {
     crate::domain::models::MediaResource {
         media_resource_id: None,
         kind: Some(kind.to_string()),
@@ -487,7 +492,12 @@ impl GenerationProvider for ScriptedProvider {
     }
 
     fn operation_types(&self) -> Vec<&str> {
-        vec!["text_to_image", "image_edit", "text_to_video", "image_to_video"]
+        vec![
+            "text_to_image",
+            "image_edit",
+            "text_to_video",
+            "image_to_video",
+        ]
     }
 
     fn vendor(&self) -> &'static str {
@@ -501,7 +511,8 @@ impl GenerationProvider for ScriptedProvider {
         _context: &GenerationsRequestContext,
     ) -> Result<GenerationDispatchOutcome, GenerationsError> {
         let behavior = self
-            .inner.dispatch_queue
+            .inner
+            .dispatch_queue
             .lock()
             .unwrap()
             .pop()
@@ -530,7 +541,11 @@ impl GenerationProvider for ScriptedProvider {
         record: &GenerationRecord,
         _context: &GenerationsRequestContext,
     ) -> Result<Option<GenerationDispatchOutcome>, GenerationsError> {
-        self.inner.retrieved_records.lock().unwrap().push(record.clone());
+        self.inner
+            .retrieved_records
+            .lock()
+            .unwrap()
+            .push(record.clone());
         let behavior = self.inner.retrieval_queue.lock().unwrap().pop();
         Ok(behavior.map(|behavior| match behavior {
             RetrievalBehavior::CompleteWithVideo { url } => {
@@ -680,7 +695,10 @@ async fn async_image_task_refresh_reaches_the_aggregate_adapter_that_dispatched(
         Some("nano-banana"),
         "the resolved vendor must be persisted at dispatch time"
     );
-    assert_eq!(created.generation.source_job_id.as_deref(), Some("nano-task-1"));
+    assert_eq!(
+        created.generation.source_job_id.as_deref(),
+        Some("nano-task-1")
+    );
 
     let refreshed = GenerationsService::get_generation(&state, &context(), &created.generation.id)
         .await
@@ -704,7 +722,12 @@ async fn async_image_task_refresh_reaches_the_aggregate_adapter_that_dispatched(
         .0;
     assert_eq!(results.len(), 1);
     assert_eq!(
-        results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+        results[0]
+            .resource_snapshot
+            .as_ref()
+            .unwrap()
+            .url
+            .as_deref(),
         Some("https://cdn.example/nano-banana-image.png")
     );
 }
@@ -747,7 +770,10 @@ async fn async_video_task_refresh_polls_the_dispatching_adapter_across_pending_r
     .expect("dispatch pends");
     assert_eq!(created.generation.status, GenerationStatus::Running);
     assert_eq!(created.generation.source_provider.as_deref(), Some("kling"));
-    assert_eq!(created.generation.source_job_id.as_deref(), Some("kling-task-7"));
+    assert_eq!(
+        created.generation.source_job_id.as_deref(),
+        Some("kling-task-7")
+    );
 
     // A still-running vendor keeps the record pending across refreshes.
     let pending = GenerationsService::get_generation(&state, &context(), &created.generation.id)
@@ -776,7 +802,12 @@ async fn async_video_task_refresh_polls_the_dispatching_adapter_across_pending_r
         .0;
     assert_eq!(results.len(), 1);
     assert_eq!(
-        results[0].resource_snapshot.as_ref().unwrap().url.as_deref(),
+        results[0]
+            .resource_snapshot
+            .as_ref()
+            .unwrap()
+            .url
+            .as_deref(),
         Some("https://cdn.example/kling-final.mp4")
     );
     assert_eq!(
@@ -918,7 +949,10 @@ async fn conversation_grouping_reassembles_one_multi_turn_conversation() {
             .iter()
             .map(|record| record.id.as_str())
             .collect::<Vec<_>>(),
-        vec![created_second.generation.id.as_str(), created_first.generation.id.as_str()],
+        vec![
+            created_second.generation.id.as_str(),
+            created_first.generation.id.as_str()
+        ],
         "exactly the two conversation records, newest first"
     );
 

@@ -7,9 +7,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::domain::models::{
-    GenerationRecord, GenerationResult, GenerationTimelineEvent,
-};
+use crate::domain::models::{GenerationRecord, GenerationResult, GenerationTimelineEvent};
 use crate::error::GenerationsError;
 
 // ---------------------------------------------------------------------------
@@ -156,7 +154,8 @@ pub struct ListResultsParams {
 #[async_trait]
 pub trait GenerationResultRepository: Send + Sync {
     /// Persist a new generation result.
-    async fn create(&self, result: &GenerationResult) -> Result<GenerationResult, GenerationsError>;
+    async fn create(&self, result: &GenerationResult)
+        -> Result<GenerationResult, GenerationsError>;
 
     /// Retrieve a single generation result by id.
     async fn get(
@@ -172,10 +171,8 @@ pub trait GenerationResultRepository: Send + Sync {
     ) -> Result<(Vec<GenerationResult>, Option<String>, bool), GenerationsError>;
 
     /// Update a generation result (e.g. after saving to assets).
-    async fn update(
-        &self,
-        result: &GenerationResult,
-    ) -> Result<GenerationResult, GenerationsError>;
+    async fn update(&self, result: &GenerationResult)
+        -> Result<GenerationResult, GenerationsError>;
 }
 
 // ---------------------------------------------------------------------------

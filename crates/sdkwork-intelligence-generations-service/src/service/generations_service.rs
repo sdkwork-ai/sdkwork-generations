@@ -10,7 +10,7 @@ use crate::domain::models::{
     GenerationTimelineEvent, PageInfo, SaveGenerationResultToAssetsRequest,
 };
 use crate::domain::pricing::{
-    GenerationPricingEstimate, GenerationPricingEstimateRequest, GenerationPricingError,
+    GenerationPricingError, GenerationPricingEstimate, GenerationPricingEstimateRequest,
     GenerationPricingPort, GenerationPricingScope, UnconfiguredGenerationPricingPort,
 };
 use crate::error::GenerationsError;
@@ -72,10 +72,7 @@ impl GenerationsServiceState {
 
     /// Replace the pricing port (builder style) so the composition host can
     /// inject its own credit-estimation implementation.
-    pub fn with_pricing_port(
-        mut self,
-        pricing_port: Arc<dyn GenerationPricingPort>,
-    ) -> Self {
+    pub fn with_pricing_port(mut self, pricing_port: Arc<dyn GenerationPricingPort>) -> Self {
         self.pricing_port = pricing_port;
         self
     }
@@ -157,9 +154,7 @@ impl GenerationsService {
             .await
             .map_err(|error| match error {
                 GenerationPricingError::NotConfigured => GenerationsError::PricingNotConfigured,
-                GenerationPricingError::Backend(message) => {
-                    GenerationsError::Pricing(message)
-                }
+                GenerationPricingError::Backend(message) => GenerationsError::Pricing(message),
             })
     }
 
@@ -250,8 +245,14 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
-        Self::create_generation(state, context, GenerationModality::Image, "text_to_image", command)
-            .await
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Image,
+            "text_to_image",
+            command,
+        )
+        .await
     }
 
     /// Convenience entry for image edit.
@@ -260,8 +261,14 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
-        Self::create_generation(state, context, GenerationModality::Image, "image_edit", command)
-            .await
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Image,
+            "image_edit",
+            command,
+        )
+        .await
     }
 
     /// Convenience entry for text-to-video.
@@ -270,8 +277,14 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
-        Self::create_generation(state, context, GenerationModality::Video, "text_to_video", command)
-            .await
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Video,
+            "text_to_video",
+            command,
+        )
+        .await
     }
 
     /// Convenience entry for image-to-video.
@@ -344,8 +357,14 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
-        Self::create_generation(state, context, GenerationModality::Music, "text_to_music", command)
-            .await
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Music,
+            "text_to_music",
+            command,
+        )
+        .await
     }
 
     /// Convenience entry for lyrics-to-music.
@@ -370,8 +389,14 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
-        Self::create_generation(state, context, GenerationModality::Sfx, "sound_effects", command)
-            .await
+        Self::create_generation(
+            state,
+            context,
+            GenerationModality::Sfx,
+            "sound_effects",
+            command,
+        )
+        .await
     }
 
     /// Convenience entry for speech synthesis.
@@ -380,8 +405,7 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         command: &CreateGenerationCommandRequest,
     ) -> Result<GenerationCommandResponse, GenerationsError> {
-        Self::create_generation(state, context, GenerationModality::Voice, "speech", command)
-            .await
+        Self::create_generation(state, context, GenerationModality::Voice, "speech", command).await
     }
 
     /// Convenience entry for voice transcription.
@@ -486,8 +510,13 @@ impl GenerationsService {
         context: &GenerationsRequestContext,
         generation_id: &str,
         params: ListTimelineParams,
-    ) -> Result<(Vec<crate::domain::models::GenerationTimelineEvent>, PageInfo), GenerationsError>
-    {
+    ) -> Result<
+        (
+            Vec<crate::domain::models::GenerationTimelineEvent>,
+            PageInfo,
+        ),
+        GenerationsError,
+    > {
         let scope = owner_scope(context);
         let record = state
             .repository
@@ -632,11 +661,10 @@ impl GenerationsService {
                 continue;
             }
 
-            if let Err(error) =
-                state
-                    .asset_port
-                    .save_generation_result(&generation.id, &result.id, &request, context)
-                    .await
+            if let Err(error) = state
+                .asset_port
+                .save_generation_result(&generation.id, &result.id, &request, context)
+                .await
             {
                 tracing::warn!(
                     generation_id = %generation.id,
@@ -671,8 +699,7 @@ fn resolve_provider<'a>(
     operation_type: &str,
 ) -> Result<&'a dyn GenerationProvider, GenerationsError> {
     for provider in state.providers().iter() {
-        if provider.modality() == *modality
-            && provider.operation_types().contains(&operation_type)
+        if provider.modality() == *modality && provider.operation_types().contains(&operation_type)
         {
             return Ok(provider.as_ref());
         }
@@ -911,11 +938,14 @@ fn validate_creation_parameters(
             let parts: Vec<&str> = size.split('x').collect();
             parts.len() == 2
                 && parts.iter().all(|part| {
-                    part.parse::<u32>().is_ok_and(|dimension| (1..=8192).contains(&dimension))
+                    part.parse::<u32>()
+                        .is_ok_and(|dimension| (1..=8192).contains(&dimension))
                 })
         };
         if !ok {
-            return Err(invalid("size must look like `1024x1024` with sides between 1 and 8192"));
+            return Err(invalid(
+                "size must look like `1024x1024` with sides between 1 and 8192",
+            ));
         }
     }
     if let Some(ratio) = string_from(&["aspectRatio", "aspect_ratio"]) {
@@ -1004,7 +1034,8 @@ mod validation_tests {
             "generationConfig": { "durationSeconds": 5, "aspectRatio": "16:9", "imageCount": 2 },
             "seed": 42,
             "cfgScale": 0.8,
-        })).is_ok());
+        }))
+        .is_ok());
         assert!(validate(json!({ "speed": 1.2, "voice": "alloy" })).is_ok());
         assert!(validate(serde_json::Value::Null).is_ok());
     }
@@ -1055,26 +1086,36 @@ mod validation_tests {
         // reach the vendor unfetchable. Both must fail locally.
         assert!(validate(json!({
             "referenceImages": [{ "assetId": "asset.1" }]
-        })).is_err());
+        }))
+        .is_err());
         assert!(validate(json!({
             "referenceImages": [{ "url": "drive://spaces/s1/nodes/n1" }]
-        })).is_err());
+        }))
+        .is_err());
         assert!(validate(json!({
             "referenceVideos": [{ "videoUrl": "" }]
-        })).is_err());
-        assert!(validate(json!({
-            "referenceImages": ["https://cdn.example/ref.png"]
-        })).is_err(), "plain-string entries are not object locators either");
+        }))
+        .is_err());
+        assert!(
+            validate(json!({
+                "referenceImages": ["https://cdn.example/ref.png"]
+            }))
+            .is_err(),
+            "plain-string entries are not object locators either"
+        );
 
         assert!(validate(json!({
             "referenceImages": [{ "url": "https://cdn.example/ref.png", "assetId": "asset.1" }]
-        })).is_ok());
+        }))
+        .is_ok());
         assert!(validate(json!({
             "referenceVideos": [{ "videoUrl": "https://cdn.example/drive.mp4" }]
-        })).is_ok());
+        }))
+        .is_ok());
         assert!(validate(json!({
             "referenceImages": [{ "publicUrl": "https://cdn.example/ref.png" }]
-        })).is_ok());
+        }))
+        .is_ok());
     }
 }
 
@@ -1112,5 +1153,3 @@ fn command_metadata(command: &CreateGenerationCommandRequest) -> serde_json::Val
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
-
-
